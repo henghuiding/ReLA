@@ -271,13 +271,13 @@ class MultiScaleMaskedReferringDecoder(nn.Module):
         # define Transformer decoder here
         self.num_heads = nheads
         self.num_layers = dec_layers
-        self.RLA_vision = nn.ModuleList()
-        self.RIA_layers = nn.ModuleList()
-        self.rla_weight = rla_weight
+        self.att_weight = rla_weight
+        self.self_attention_layers = nn.ModuleList()
+        self.RIA_cross_attention = nn.ModuleList()
         self.transformer_ffn_layers = nn.ModuleList()
 
         for _ in range(self.num_layers):
-            self.RLA_vision.append(
+            self.self_attention_layers.append(
                 SelfAttentionLayer(
                     d_model=hidden_dim,
                     nhead=nheads,
@@ -286,7 +286,7 @@ class MultiScaleMaskedReferringDecoder(nn.Module):
                 )
             )
 
-            self.RIA_layers.append(
+            self.RIA_cross_attention.append(
                 CrossAttentionLayer(
                     d_model=hidden_dim,
                     nhead=nheads,
@@ -305,14 +305,24 @@ class MultiScaleMaskedReferringDecoder(nn.Module):
             )
 
         self.decoder_norm = nn.LayerNorm(hidden_dim)
+        self.decoder_norm_2 = nn.LayerNorm(hidden_dim)
 
         self.num_queries = num_queries
+        # learnable query features
         self.query_feat = nn.Embedding(num_queries, hidden_dim)
+        # learnable query p.e.
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
         
         self.lang_proj = Linear(768, hidden_dim, False)
-        self.lang_weight = nn.parameter.Parameter(data=torch.as_tensor(0.))
-        self.RLA_lang_att = CrossAttentionLayer(
+        self.RLA_proj = Linear(hidden_dim, hidden_dim, False)
+        self.RLA_gate = nn.parameter.Parameter(data=torch.as_tensor(0.))
+        self.RLA_lang = CrossAttentionLayer(
+                    d_model=hidden_dim,
+                    nhead=nheads,
+                    dropout=0.0,
+                    normalize_before=pre_norm,
+                )
+        self.RLA_region = SelfAttentionLayer(
                     d_model=hidden_dim,
                     nhead=nheads,
                     dropout=0.0,
@@ -329,6 +339,7 @@ class MultiScaleMaskedReferringDecoder(nn.Module):
             else:
                 self.input_proj.append(nn.Sequential())
         nn.init.zeros_(self.lang_proj.weight)
+        nn.init.zeros_(self.RLA_proj.weight)
 
         # output FFNs
         if self.mask_classification:
@@ -380,39 +391,27 @@ class MultiScaleMaskedReferringDecoder(nn.Module):
         query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, bs, 1)
         output = self.query_feat.weight.unsqueeze(1).repeat(1, bs, 1)
 
-        predictions_class = []
+        predictions_minimap = []
         predictions_mask = []
 
-        # prediction heads on learnable query features
-        outputs_minimap, outputs_mask, attn_mask, tgt_mask, nt_label = self.forward_prediction_heads(
-            output, mask_features, attn_mask_target_size=size_list[0])
-        predictions_class.append(outputs_minimap)
+        outputs_class, outputs_mask, attn_mask, tgt_mask, nt_label = self.forward_prediction_heads(
+            output, output, mask_features, attn_mask_target_size=size_list[0])
+        predictions_minimap.append(outputs_class)
         predictions_mask.append(outputs_mask)
 
         # ReLA is applied multiple times for perfromance
         for i in range(self.num_layers):
             level_index = i % self.num_feature_levels
             attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False
-
-            # cross-attention of regions and vision features
-            output = self.RIA_layers[i](
+            # attention: cross-attention first
+            output = self.RIA_cross_attention[i](
                 output, src[level_index],
                 memory_mask=attn_mask,
                 memory_key_padding_mask=None,
                 pos=pos[level_index], query_pos=query_embed
             )
 
-            if i == 0:
-                # For the first layer, apply full RLA
-                # Later, apply region attention only for memory saving
-                lang_feat_att = lang_feat.permute(0,2,1)
-                lang_feat_att = self.lang_proj(lang_feat_att)
-                lang_feat_att = self.RLA_lang_att(output, lang_feat_att.permute(1,0,2)) * F.sigmoid(self.lang_weight)
-                output = output + lang_feat_att * self.rla_weight
-
-            # RLA vision attention
-            # self attention itself has a skip connection
-            output = self.RLA_vision[i](
+            output = self.self_attention_layers[i](
                 output, tgt_mask=None,
                 tgt_key_padding_mask=None,
                 query_pos=query_embed
@@ -421,40 +420,55 @@ class MultiScaleMaskedReferringDecoder(nn.Module):
             # Postprocessing
             output = self.transformer_ffn_layers[i](output)
 
-            outputs_minimap, outputs_mask, attn_mask, tgt_mask, nt_label = self.forward_prediction_heads(
-                output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
+            # apply a full RLA after RIA
+            # Note: 
+            # Performance is the same with the paper, but the training is not very stable
+            # sometimes it may fail to converge
+            # Please see the main branch for fix
 
-            # Predictions of all passes are recorded, but only the last output is used in this code
-            predictions_class.append(outputs_minimap)
+            if i == self.num_layers - 1:
+                RLA_lang_feat = self.lang_proj(lang_feat.permute(0,2,1))
+                RLA_lang_feat = self.RLA_lang(output, RLA_lang_feat.permute(1,0,2))
+                RLA_vision_feat = self.RLA_region(output)
+                RLA_out = self.RLA_proj(RLA_lang_feat + RLA_vision_feat) * F.sigmoid(self.RLA_gate)
+                RLA_out = output + self.att_weight * RLA_out
+            else:
+                RLA_out = output
+
+            outputs_class, outputs_mask, attn_mask, tgt_mask, nt_label = self.forward_prediction_heads(output, RLA_out, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
+
+            predictions_minimap.append(outputs_class)
             predictions_mask.append(outputs_mask)
 
         out = {
-            'pred_logits': predictions_class[-1],
+            'pred_logits': predictions_minimap[-1],
             'pred_masks': tgt_mask,
             'all_masks': outputs_mask,
             'nt_label': nt_label
         }
         return out
 
-    def forward_prediction_heads(self, output, mask_features, attn_mask_target_size):
-        region_features = self.decoder_norm(output)
-        region_features = region_features.transpose(0, 1)
+    def forward_prediction_heads(self, region_feature, RLA_feature, mask_features, attn_mask_target_size):
+        # RLA feat -> minimap
+        RLA_feature = self.decoder_norm_2(RLA_feature)
+        RLA_feature = RLA_feature.transpose(0, 1)
+        outputs_minimap = self.minimap_embed(RLA_feature)
 
-
-        region_embed = self.mask_embed(region_features)
-        # F_region * F_mask -> all masks
-        # Note: here we used region feature after RLA for mask prediction
-        #       this can greatly enhance the training stability
-        all_mask = torch.einsum("bqc,bchw->bqhw", region_embed, mask_features)
-
-        # F_minimap * F_region * F_mask -> target mask
-        outputs_minimap = self.minimap_embed(region_features)
-        tgt_embed = torch.einsum("bqa,bqc->bac", outputs_minimap, region_embed)
+        # _region feat -> mask
+        RIA_feature = self.decoder_norm(region_feature)
+        RIA_feature = RIA_feature.transpose(0, 1)
+        mask_embed = self.mask_embed(RIA_feature)
+        
+        # RIA feat -> all masks
+        # q: region num
+        all_mask = torch.einsum("bqc,bchw->bqhw", mask_embed, mask_features)
+        # _region + minimap -> target mask
+        tgt_embed = torch.einsum("bqa,bqc->bac", outputs_minimap, mask_embed)
         tgt_mask = torch.einsum("bac,bchw->bahw", tgt_embed, mask_features)
 
-        # F_region -> NT_label
-        nt_label = self.nt_embed(region_features)
-        nt_label = nt_label.mean(dim=1) # Global average pooling
+        # RLA feat -> nt_label
+        nt_label = self.nt_embed(RLA_feature)
+        nt_label = nt_label.mean(dim=1)
 
         attn_mask = F.interpolate(all_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False)
         attn_mask = (attn_mask.sigmoid().flatten(2).unsqueeze(1).repeat(1, self.num_heads, 1, 1).flatten(0, 1) < 0.5).bool()

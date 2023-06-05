@@ -132,6 +132,9 @@ class Trainer(DefaultTrainer):
 
                 if isinstance(module, torch.nn.Embedding):
                     hyperparams["weight_decay"] = weight_decay_embed
+
+                if module_name.startswith('RLA_'):
+                    hyperparams["lr"] = 0.1 * cfg.SOLVER.BASE_LR
                 params.append({"params": [value], **hyperparams})
 
         hyperparams = copy.copy(defaults)
