@@ -7,6 +7,9 @@
 
 This repository contains code for paper [GRES: Generalized Referring Expression Segmentation](https://arxiv.org/abs/2306.00968).
 
+<div align="center">
+  <img src="https://github.com/henghuiding/ReLA/blob/main/imgs/fig1.png?raw=true" width="100%" height="100%"/>
+</div><br/>
 
 ## Installation:
 
