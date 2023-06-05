@@ -55,7 +55,7 @@ For the full list of base configs, see `configs/referring_R50.yaml` and `configs
 
 ## Models
 
-[Onedrive](https://entuedu-my.sharepoint.com/:u:/g/personal/liuc0058_e_ntu_edu_sg/EbrpMReEP4RBoWEleQOHsPoBk9Ttj5SkxX4NJ1-vwYE-eQ?e=JzovhE)
+[Onedrive](https://entuedu-my.sharepoint.com/:u:/g/personal/liuc0058_e_ntu_edu_sg/Ed7MVRIoYjpFlYebJimfQUMBED9YTMhIe62VySCuyDQlJQ?e=KaX9Qd)
 
 
 ## Acknowledgement
