@@ -13,4 +13,4 @@ datasets
         ├── COCO_train2014_xxxxxxxxxxxx.jpg
         └── ...
 ```
-Download our gRefCOCO from here!
+Download our gRefCOCO from [here](https://github.com/henghuiding/gRefCOCO)!
