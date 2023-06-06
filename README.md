@@ -3,9 +3,13 @@
 [![Python](https://img.shields.io/badge/Python-3.7%20|%203.8%20|%203.9-blue.svg?style=&logo=python&logoColor=ffdd54)](https://www.python.org/downloads/)
 [![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/gres-generalized-referring-expression-1/generalized-referring-expression-segmentation)](https://paperswithcode.com/sota/generalized-referring-expression-segmentation?p=gres-generalized-referring-expression-1)
 
-**[🏠[Project page]](https://henghuiding.github.io/GRES/)** &emsp; **[📄[Arxiv]](https://arxiv.org/abs/2306.00968)**  &emsp; **[🔥[New Dataset]](https://github.com/henghuiding/gRefCOCO)**
+**[🏠[Project page]](https://henghuiding.github.io/GRES/)** &emsp; **[📄[Arxiv]](https://arxiv.org/abs/2306.00968)**  &emsp; **[📄[PDF]](https://openaccess.thecvf.com/content/CVPR2023/papers/Liu_GRES_Generalized_Referring_Expression_Segmentation_CVPR_2023_paper.pdf)** &emsp; **[🔥[New Dataset Download]](https://github.com/henghuiding/gRefCOCO)**
 
-This repository contains code for paper [GRES: Generalized Referring Expression Segmentation](https://arxiv.org/abs/2306.00968).
+This repository contains code for **CVPR2023** paper:
+> [GRES: Generalized Referring Expression Segmentation](https://arxiv.org/abs/2306.00968)  
+> Chang Liu, Henghui Ding, Xudong Jiang  
+> CVPR 2023 Highlight, Acceptance Rate 2.5%
+
 
 <div align="center">
   <img src="https://github.com/henghuiding/ReLA/blob/main/imgs/fig1.png?raw=true" width="100%" height="100%"/>
@@ -15,7 +19,7 @@ This repository contains code for paper [GRES: Generalized Referring Expression 
 
 The code is tested under CUDA 11.8, Pytorch 1.11.0 and Detectron2 0.6.
 
-1. Install [detectron2](https://github.com/facebookresearch/detectron2) following the [manual](https://detectron2.readthedocs.io/en/latest/)
+1. Install [Detectron2](https://github.com/facebookresearch/detectron2) following the [manual](https://detectron2.readthedocs.io/en/latest/)
 2. Run `sh make.sh` under `gres_model/modeling/pixel_decoder/ops`
 3. Install other required packages: `pip -r requirements.txt`
 4. Prepare the dataset following `datasets/DATASET.md`
@@ -63,7 +67,7 @@ For the full list of base configs, see `configs/referring_R50.yaml` and `configs
 
 ## Acknowledgement
 
-This project is based on [refer](https://github.com/lichengunc/refer), [maskformer](https://github.com/facebookresearch/Mask2Former), [detectron2](https://github.com/facebookresearch/detectron2). Many thanks to the authors for their great works!
+This project is based on [refer](https://github.com/lichengunc/refer), [Mask2Former](https://github.com/facebookresearch/Mask2Former), [Detectron2](https://github.com/facebookresearch/detectron2), [VLT](https://github.com/henghuiding/Vision-Language-Transformer). Many thanks to the authors for their great works!
 
 ## BibTeX
 Please consider to cite GRES if it helps your research.
