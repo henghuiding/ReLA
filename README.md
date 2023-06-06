@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.7%20|%203.8%20|%203.9-blue.svg?style=&logo=python&logoColor=ffdd54)](https://www.python.org/downloads/)
 [![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/gres-generalized-referring-expression-1/generalized-referring-expression-segmentation)](https://paperswithcode.com/sota/generalized-referring-expression-segmentation?p=gres-generalized-referring-expression-1)
 
-**[🏠[Project page]](https://henghuiding.github.io/GRES/)** &emsp; **[📄[Arxiv]](https://arxiv.org/abs/2306.00968)**  &emsp; **[📄[PDF]](https://openaccess.thecvf.com/content/CVPR2023/papers/Liu_GRES_Generalized_Referring_Expression_Segmentation_CVPR_2023_paper.pdf)** &emsp; **[🔥[New Dataset Download]](https://github.com/henghuiding/gRefCOCO)**
+**[🏠[Project page]](https://henghuiding.github.io/GRES/)** &emsp; **[📄[arXiv]](https://arxiv.org/abs/2306.00968)**  &emsp; **[📄[PDF]](https://openaccess.thecvf.com/content/CVPR2023/papers/Liu_GRES_Generalized_Referring_Expression_Segmentation_CVPR_2023_paper.pdf)** &emsp; **[🔥[New Dataset Download]](https://github.com/henghuiding/gRefCOCO)**
 
 This repository contains code for **CVPR2023** paper:
 > [GRES: Generalized Referring Expression Segmentation](https://arxiv.org/abs/2306.00968)  
