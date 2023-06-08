@@ -52,11 +52,13 @@ python train_net.py \
     OUTPUT_DIR [path_to_weights]
 ```
 
-Add your configs subsquently to customize options. For example: 
+Note: We fine-tuned some hyperparameters for better performance, and the provided checkpoints are trained using the default configuration file with 8 GPUs and a batch size of 48. You can also add your own configurations subsequently to the training command for customized options. For example:
+
 ```
 SOLVER.IMS_PER_BATCH 48 
 SOLVER.BASE_LR 0.00001 
 ```
+
 For the full list of base configs, see `configs/referring_R50.yaml` and `configs/Base-COCO-InstanceSegmentation.yaml`
 
 
