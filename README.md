@@ -52,7 +52,7 @@ python train_net.py \
     OUTPUT_DIR [path_to_weights]
 ```
 
-Note: We fine-tuned some hyperparameters for better performance, and the provided checkpoints are trained using the default configuration file with 8 GPUs and a batch size of 48. You can also add your own configurations subsequently to the training command for customized options. For example:
+Note: You can add your own configurations subsequently to the training command for customized options. For example:
 
 ```
 SOLVER.IMS_PER_BATCH 48 
@@ -64,8 +64,17 @@ For the full list of base configs, see `configs/referring_R50.yaml` and `configs
 
 ## Models
 
-[Onedrive](https://entuedu-my.sharepoint.com/:u:/g/personal/liuc0058_e_ntu_edu_sg/Ed7MVRIoYjpFlYebJimfQUMBED9YTMhIe62VySCuyDQlJQ?e=KaX9Qd)
-[Google](https://drive.google.com/file/d/1-LZdt1Dug9eEZKLCn9Wp5nlYy0v5D8Qz/view?usp=drive_link)
+Update: We have added supports for ResNet-50 and Swin-Tiny backbones! Feel free to use and report these resource-friendly models in your work.
+
+| Backbone | cIoU | gIoU |
+|---|---|---|
+| Resnet-50 | 39.53 | 38.62 |
+| Swin-Tiny | 52.26 | 54.44 |
+| Swin-Base | 62.42 | 63.60 |
+
+All models can be downloaded from:
+
+[Onedrive](https://entuedu-my.sharepoint.com/:f:/g/personal/liuc0058_e_ntu_edu_sg/EqyL6nftLjdIihQG2rYirPoBk9G5QHGPiJZX_z62axS3ZQ?e=ahrche)
 
 ## Acknowledgement
 
