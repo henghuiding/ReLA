@@ -15,6 +15,9 @@ This repository contains code for **CVPR2023** paper:
   <img src="https://github.com/henghuiding/ReLA/blob/main/imgs/fig1.png?raw=true" width="100%" height="100%"/>
 </div><br/>
 
+## Update
+- **(2023/08/16)** A new large-scale referring video segmentation dataset [MeViS](https://henghuiding.github.io/MeViS/) is released.
+
 ## Installation:
 
 The code is tested under CUDA 11.8, Pytorch 1.11.0 and Detectron2 0.6.
@@ -83,11 +86,24 @@ This project is based on [refer](https://github.com/lichengunc/refer), [Mask2For
 ## BibTeX
 Please consider to cite GRES if it helps your research.
 
-```latex
+```bibtex
 @inproceedings{GRES,
   title={{GRES}: Generalized Referring Expression Segmentation},
   author={Liu, Chang and Ding, Henghui and Jiang, Xudong},
   booktitle={CVPR},
+  year={2023}
+}
+@article{VLT,
+  title={{VLT}: Vision-language transformer and query generation for referring segmentation},
+  author={Ding, Henghui and Liu, Chang and Wang, Suchen and Jiang, Xudong},
+  journal={IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  year={2023},
+  publisher={IEEE}
+}
+@inproceedings{MeViS,
+  title={{MeViS}: A Large-scale Benchmark for Video Segmentation with Motion Expressions},
+  author={Ding, Henghui and Liu, Chang and He, Shuting and Jiang, Xudong and Loy, Chen Change},
+  booktitle={ICCV},
   year={2023}
 }
 ```
