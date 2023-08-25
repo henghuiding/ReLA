@@ -192,8 +192,8 @@ class ReferEvaluator(DatasetEvaluator):
 
             self._logger.info(str(nt[src]))
             if empty_count[src] > 0:
-                res['T_acc'] = nt[src]['TP'] / (nt[src]['TP'] + nt[src]['FP'] + 1)
-                res['N_acc'] = nt[src]['TP'] / (nt[src]['TP'] + nt[src]['FN'] + 1)
+                res['T_acc'] = nt[src]['TN'] / (nt[src]['TN'] + nt[src]['FP'])
+                res['N_acc'] = nt[src]['TP'] / (nt[src]['TP'] + nt[src]['FN'])
             else:
                 res['T_acc'] = res['N_acc'] = 0
 
@@ -222,6 +222,10 @@ class ReferEvaluator(DatasetEvaluator):
             file_path = os.path.join(self._output_dir, f"{self._dataset_name}_results.json")
             with PathManager.open(file_path, "w") as f:
                 f.write(json.dumps(final_results_list, indent=4))
+
+            file_path = os.path.join(self._output_dir, f"{self._dataset_name}_detailed_results.json")
+            with PathManager.open(file_path, "w") as f:
+                f.write(json.dumps(results_dict, indent=4))
 
         results = OrderedDict(final_results_list)
         self._logger.info(results)
