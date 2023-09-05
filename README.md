@@ -16,6 +16,7 @@ This repository contains code for **CVPR2023** paper:
 </div><br/>
 
 ## Update
+- **(2023/08/29)** We have updated and reorganized the dataset file. Please download the latest version for train/val/testA/testB! (Note: training expressions are unchanged so the this does not influence training. But some `ref_id` and `sent_id` are re-numbered for better organization.) 
 - **(2023/08/16)** A new large-scale referring video segmentation dataset [MeViS](https://henghuiding.github.io/MeViS/) is released.
 
 ## Installation:
@@ -72,12 +73,12 @@ Update: We have added supports for ResNet-50 and Swin-Tiny backbones! Feel free 
 | Backbone | cIoU | gIoU |
 |---|---|---|
 | Resnet-50 | 39.53 | 38.62 |
-| Swin-Tiny | 52.26 | 54.44 |
+| Swin-Tiny | 57.73 | 56.86 |
 | Swin-Base | 62.42 | 63.60 |
 
 All models can be downloaded from:
 
-[Onedrive](https://entuedu-my.sharepoint.com/:f:/g/personal/liuc0058_e_ntu_edu_sg/EqyL6nftLjdIihQG2rYirPoBk9G5QHGPiJZX_z62axS3ZQ?e=ahrche)
+[Onedrive](https://entuedu-my.sharepoint.com/:f:/g/personal/liuc0058_e_ntu_edu_sg/EqyL6nftLjdIihQG2rYirPoB1Sm3HBJwuZgtPII8WcevQw?e=pI1rrg)
 
 ## Acknowledgement
 

@@ -34,7 +34,7 @@ def register_refcoco(root):
 def register_grefcoco(root):
     image_root = os.path.join(root, "images", "train2014")
     dataset_info = [
-        ('grefcoco', 'unc', ['train', 'val', 'testA']),
+        ('grefcoco', 'unc', ['train', 'val', 'testA', 'testB']),
     ]
     for name, splitby, splits in dataset_info:
         for split in splits:
