@@ -97,53 +97,57 @@ miami2025_testB
 
 Use the split field from miami2025.json to filter entries.
 
-5) What to Generate (deliverables)
-(1) New file: datasets/register_miami2025.py
-Implement:
+## 5) What to Generate (deliverables)
 
-load_miami2025_json(json_file: str, image_root: str, inst_json: str, target_split: str) -> List[dict]
+### (1) New file: `datasets/register_miami2025.py`
+Implement the following:
 
-Read miami2025.json and instances_sample.json (for schema).
+#### Function: `load_miami2025_json(json_file: str, image_root: str, inst_json: str, target_split: str) -> List[dict]`
+- Read **miami2025.json** and **instances_sample.json** (for schema inference only).
+- Build two mapping tables:
+  - `id -> annotation` from the `"annotations"` list in instances JSON.
+  - `image_id -> image_meta` (if available) from the `"images"` list.
+- For each entry whose `"split" == target_split"`:
+  - Compose `file_name = os.path.join(image_root, target_split, file_name_from_json)`.
+  - Collect polygons for all `ann_id` in this entry; merge into a single list.
+  - Set `category_id = category_id[0]` if it’s a list; default to 0 if missing.
+  - Fill `height` and `width` from `"images"` metadata if available; otherwise leave as `None` (Detectron2 can infer automatically).
+  - Store `ref_id` and the first sentence’s `"sent"` as `"sentence"`.
+- Return a list of dataset dictionaries following Detectron2’s standard format.
 
-Build id -> annotation and (if available) image_id -> image_meta maps.
+#### Function: `register_miami2025(root: str = "datasets/miami2025")`
+- Detect the environment variable **`MIAMI_INST_JSON`** at runtime:
+  - If set and the file exists, use it as the real `instances.json` path.
+  - Otherwise, fall back to the local `datasets/miami2025/instances_sample.json`.
+  - Print a message indicating which file is being used.
+- For each split in `["train", "val", "testA", "testB"]`:
+  - Register a DatasetCatalog entry with name `miami2025_<split>`.
+  - Use a lambda to call `load_miami2025_json(json_file, image_root, inst_json, split)`.
+  - Set metadata via MetadataCatalog (e.g. `evaluator_type="refcoco"`).
+- Call `register_miami2025()` upon module import, so registration runs automatically.
 
-For each entry whose split == target_split:
+#### Important:
+- The file **`instances_sample.json`** exists **only** to help Codex/Copilot understand the schema of the real COCO-style file.
+- During **actual training or evaluation**, the system should use the full **`instances.json`**,  
+  by setting an environment variable before running:
+  ```bash
+  export MIAMI_INST_JSON=/absolute/path/to/instances.json
+If the variable is not set, the script will print:
 
-Compose file_name = os.path.join(image_root, target_split, file_name_from_json).
+bash
 
-Collect polygons for all ann_id in this entry; merge into one list.
-
-Set category_id as category_id[0] if it’s a list; default to 0 if missing.
-
-Fill height/width from images if present; otherwise keep None (Detectron2 can read later).
-
-Store ref_id and the first sentence’s "sent" into "sentence".
-
-Return a list of such dicts.
-
-register_miami2025(root: str = "datasets/miami2025")
-
-For each split in ["train", "val", "testA", "testB"], register a DatasetCatalog entry:
-
-name: miami2025_<split>
-
-loader: a lambda calling load_miami2025_json(json_file, image_root, inst_json, split)
-
-Set some metadata (e.g., evaluator_type="refcoco").
-
-At module import, call register_miami2025() so registration happens as a side-effect.
-
-Important
-In comments, state clearly that at runtime the inst_json path should be switched from instances_sample.json to the real instances.json on the training machine.
+[miami2025] Using fallback instance annotation file: datasets/miami2025/instances_sample.json
+This indicates it is running in "schema reference mode" only, not for real experiments.
 
 (2) Modify train_net.py
-Add a single import near the top so the registration runs on startup:
+Add a single import near the top so dataset registration executes automatically when training or evaluation begins:
 
 python
 
 import datasets.register_miami2025  # noqa: F401
+
 (3) New config: configs/referring_miami2025.yaml
-Start from configs/referring_swin_tiny.yaml and adjust:
+Start from configs/referring_swin_tiny.yaml and modify only the dataset and output paths:
 
 yaml
 
@@ -160,18 +164,29 @@ SOLVER:
   IMS_PER_BATCH: 2
   BASE_LR: 1e-4
 OUTPUT_DIR: "outputs/miami2025_swin_tiny"
-Do not change other training knobs unless necessary.
+Do not change other hyperparameters unless required.
 
 (4) Optional helper: dataset sanity check
-Provide a tiny script (print-only) so I can quickly verify:
+Provide a minimal check script (print-only) at the end of register_miami2025.py for quick verification:
 
-Split sizes,
+Prints split sizes.
 
-One sample’s keys,
+Displays one sample’s keys.
 
-The first sentence and image path.
+Shows the first sentence and corresponding image path.
 
-Example to output at the end of register_miami2025.py (guarded by if __name__ == "__main__":).
+Example to include under:
+
+python
+
+if __name__ == "__main__":
+    from detectron2.data import DatasetCatalog
+    for split in ["train", "val"]:
+        ds = DatasetCatalog.get(f"miami2025_{split}")
+        print(f"Split {split} sample count:", len(ds))
+        if ds:
+            print("Example keys:", ds[0].keys())
+            print("Example sentence:", ds[0].get("sentence", ""))
 
 6) Constraints / Non-goals
 Do not modify gres_model/** or custom CUDA ops.
