@@ -25,6 +25,82 @@ Notes
 import json
 import os
 from typing import List, Dict, Any
+
+
+def _resolve_image_path(image_root, file_name_from_json, image_id=None, images_map=None):
+    """Resolve the correct image path for a miami2025 sample."""
+    if not file_name_from_json:
+        return os.path.join(image_root, file_name_from_json or "")
+
+    rel_path = file_name_from_json.replace("\\", "/")
+    dir_part, base_name = os.path.split(rel_path)
+    name_no_ext, ext = os.path.splitext(base_name)
+
+    if "_" in name_no_ext:
+        prefix, suffix = name_no_ext.rsplit("_", 1)
+        if suffix.isdigit():
+            name_no_ext = prefix
+
+    normalized_base = name_no_ext + ext
+    if dir_part:
+        normalized_rel = f"{dir_part}/{normalized_base}"
+    else:
+        normalized_rel = normalized_base
+
+    candidate_subdirs = []
+    if "train2014" in normalized_rel:
+        candidate_subdirs.append("train2014")
+    if "val2014" in normalized_rel:
+        candidate_subdirs.append("val2014")
+
+    if not candidate_subdirs and images_map and image_id is not None:
+        meta = images_map.get(image_id)
+        if meta:
+            inst_file = meta.get("file_name", "")
+            if "train2014" in inst_file:
+                candidate_subdirs.append("train2014")
+            if "val2014" in inst_file:
+                candidate_subdirs.append("val2014")
+
+    if not candidate_subdirs:
+        candidate_subdirs = ["train2014", "val2014"]
+
+    normalized_rel = normalized_rel.lstrip("/")
+    initial_candidates = []
+    if "/" in normalized_rel:
+        initial_candidates.append(os.path.join(image_root, normalized_rel))
+
+    for subdir in candidate_subdirs:
+        remainder = normalized_rel
+        if remainder.startswith(f"{subdir}/"):
+            remainder = remainder.split("/", 1)[1]
+        initial_candidates.append(os.path.join(image_root, subdir, remainder))
+
+    seen = set()
+    candidates = []
+    for cand in initial_candidates:
+        norm_cand = os.path.normpath(cand)
+        if norm_cand not in seen:
+            seen.add(norm_cand)
+            candidates.append(norm_cand)
+
+    for cand in candidates:
+        if os.path.exists(cand):
+            return cand
+
+    if candidates:
+        print(
+            f"[miami2025] Warning: unable to find image for '{file_name_from_json}', "
+            f"tried: {candidates}"
+        )
+        return candidates[0]
+
+    fallback = os.path.join(image_root, normalized_rel)
+    print(
+        f"[miami2025] Warning: no candidate paths for '{file_name_from_json}', "
+        f"fallback to {fallback}"
+    )
+    return fallback
 from detectron2.data import DatasetCatalog, MetadataCatalog
 
 
@@ -49,15 +125,6 @@ def load_miami2025_json(
         inst = json.load(f)
 
     id2ann, id2img = _build_id_maps(inst)
-
-    # Map logical split -> actual image subdir
-    split_to_dir = {
-        "train": "train2014",
-        "val":   "val2014",
-        "testA": "val2014",
-        "testB": "val2014",
-    }
-    subdir = split_to_dir.get(target_split, "val2014")
 
     data: List[Dict[str, Any]] = []
     missing_anns = 0
@@ -100,9 +167,13 @@ def load_miami2025_json(
         if img_meta:
             height, width = img_meta.get("height", None), img_meta.get("width", None)
 
-        abs_path = os.path.join(image_root, subdir, file_name)
         record = {
-            "file_name": abs_path,  # absolute path for safety
+            "file_name": _resolve_image_path(
+                image_root,
+                file_name,
+                image_id=item.get("image_id"),
+                images_map=id2img,
+            ),  # absolute path for safety
             "image_id": image_id,
             "height": height,
             "width":  width,

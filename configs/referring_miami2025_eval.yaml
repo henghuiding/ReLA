@@ -1,0 +1,6 @@
+_BASE_: referring_miami2025.yaml
+
+DATASETS:
+  TEST: ("miami2025_testA", "miami2025_testB")
+
+OUTPUT_DIR: "outputs/miami2025_eval"
