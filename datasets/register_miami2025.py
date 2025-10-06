@@ -70,7 +70,16 @@ def load_miami2025_json(
         ann_ids  = item.get("ann_id", [])
         cat_ids  = item.get("category_id", [])
         ref_id   = item.get("ref_id", None)
-        sent     = item.get("sentences", [{}])[0].get("sent", "")
+        sentences = item.get("sentences")
+        sent = ""
+        if isinstance(sentences, list) and sentences:
+            first_sent = sentences[0]
+            if isinstance(first_sent, dict):
+                sent = first_sent.get("sent", "")
+        elif isinstance(sentences, dict):
+            sent = sentences.get("sent", "")
+        if sent == "":
+            print(f"[miami2025] Warning: empty sentence for ref_id={ref_id}")
 
         # Merge polygons of all referred instance ids
         seg_list = []
