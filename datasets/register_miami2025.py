@@ -24,6 +24,7 @@ Notes
 
 import json
 import os
+import re
 from typing import List, Dict, Any
 
 
@@ -36,12 +37,17 @@ def _resolve_image_path(image_root, file_name_from_json, image_id=None, images_m
     dir_part, base_name = os.path.split(rel_path)
     name_no_ext, ext = os.path.splitext(base_name)
 
-    if "_" in name_no_ext:
-        prefix, suffix = name_no_ext.rsplit("_", 1)
-        if suffix.isdigit():
-            name_no_ext = prefix
+    normalized_base = base_name
+    if ext.lower() == ".jpg" and "_000000" in name_no_ext and "_" in name_no_ext:
+        prefix_before_suffix = name_no_ext.rsplit("_", 1)[0]
+        if "_000000" in prefix_before_suffix:
+            replaced = re.sub(r"(_\d+)(\.jpg)$", r"\2", base_name)
+            if replaced != base_name:
+                print(
+                    f"[miami2025] Normalized image name: '{base_name}' -> '{replaced}'"
+                )
+                normalized_base = replaced
 
-    normalized_base = name_no_ext + ext
     if dir_part:
         normalized_rel = f"{dir_part}/{normalized_base}"
     else:
