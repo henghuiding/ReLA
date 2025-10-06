@@ -8,6 +8,7 @@ import torch
 from detectron2.config import configurable
 from detectron2.data import detection_utils as utils
 from detectron2.data import transforms as T
+from detectron2.structures import BoxMode
 
 from transformers import BertTokenizer
 from pycocotools import mask as coco_mask
@@ -55,6 +56,26 @@ def build_transform_test(cfg):
     ])
 
     return augmentation
+
+
+def _infer_bbox_from_segmentation(obj):
+    seg = obj.get("segmentation", [])
+    if not seg:
+        return None
+    xs = []
+    ys = []
+    for poly in seg:
+        if not poly or len(poly) < 4:
+            continue
+        xs.extend(poly[0::2])
+        ys.extend(poly[1::2])
+    if not xs or not ys:
+        return None
+    x0, y0 = min(xs), min(ys)
+    x1, y1 = max(xs), max(ys)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return [float(x0), float(y0), float(x1), float(y1)]
 
 
 # This is specifically designed for the COCO dataset.
@@ -130,11 +151,19 @@ class RefCOCOMapper:
         dataset_dict["padding_mask"] = torch.as_tensor(np.ascontiguousarray(padding_mask))
 
         # USER: Implement additional transformations if you have other types of data
-        annos = [
-            utils.transform_instance_annotations(obj, transforms, image_shape)
-            for obj in dataset_dict.pop("annotations")
-            if (obj.get("iscrowd", 0) == 0) and (obj.get("empty", False) == False)
-        ]
+        annos = []
+        for obj in dataset_dict.pop("annotations"):
+            if (obj.get("iscrowd", 0) != 0) or obj.get("empty", False):
+                continue
+            if ("bbox" not in obj) or ("bbox_mode" not in obj):
+                inferred = _infer_bbox_from_segmentation(obj)
+                if inferred is not None:
+                    obj["bbox"] = inferred
+                    obj["bbox_mode"] = BoxMode.XYXY_ABS
+                else:
+                    continue
+            annos.append(utils.transform_instance_annotations(obj, transforms, image_shape))
+        dataset_dict["annotations"] = annos
         instances = utils.annotations_to_instances(annos, image_shape)
 
         empty = dataset_dict.get("empty", False)

@@ -25,7 +25,9 @@ Notes
 import json
 import os
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+from detectron2.structures import BoxMode
 
 
 def _resolve_image_path(image_root, file_name_from_json, image_id=None, images_map=None):
@@ -118,6 +120,41 @@ def _build_id_maps(inst_data: Dict[str, Any]):
     return id2ann, id2img
 
 
+def _bbox_from_polys(
+    polys: List[List[float]],
+    height: Optional[int] = None,
+    width: Optional[int] = None,
+):
+    """Compute an axis-aligned bbox [x0, y0, x1, y1] from segmentation polygons."""
+    if not polys:
+        return None
+
+    xs: List[float] = []
+    ys: List[float] = []
+
+    for poly in polys:
+        if not poly or len(poly) < 4:
+            continue
+        xs.extend(float(x) for x in poly[0::2])
+        ys.extend(float(y) for y in poly[1::2])
+
+    if not xs or not ys:
+        return None
+
+    if width is not None and width > 0:
+        xs = [min(max(x, 0.0), float(width - 1)) for x in xs]
+    if height is not None and height > 0:
+        ys = [min(max(y, 0.0), float(height - 1)) for y in ys]
+
+    x0, x1 = min(xs), max(xs)
+    y0, y1 = min(ys), max(ys)
+
+    if x1 <= x0 or y1 <= y0:
+        return None
+
+    return [x0, y0, x1, y1]
+
+
 def load_miami2025_json(
     json_file: str,
     image_root: str,
@@ -134,6 +171,7 @@ def load_miami2025_json(
 
     data: List[Dict[str, Any]] = []
     missing_anns = 0
+    stats: Dict[str, int] = {}
     for item in miami:
         if item.get("split") != target_split:
             continue
@@ -151,8 +189,6 @@ def load_miami2025_json(
                 sent = first_sent.get("sent", "")
         elif isinstance(sentences, dict):
             sent = sentences.get("sent", "")
-        if sent == "":
-            print(f"[miami2025] Warning: empty sentence for ref_id={ref_id}")
 
         # Merge polygons of all referred instance ids
         seg_list = []
@@ -173,6 +209,24 @@ def load_miami2025_json(
         if img_meta:
             height, width = img_meta.get("height", None), img_meta.get("width", None)
 
+        bbox = _bbox_from_polys(seg_list, height=height, width=width)
+        if bbox is None:
+            stats["skipped_due_to_bad_bbox"] = stats.get("skipped_due_to_bad_bbox", 0) + 1
+            continue
+
+        if not sent or not sent.strip():
+            stats["skipped_empty_sentence"] = stats.get("skipped_empty_sentence", 0) + 1
+            continue
+
+        cat_id = cat_ids[0] if cat_ids else 0
+        ann = {
+            "iscrowd": 0,
+            "category_id": int(cat_id),
+            "segmentation": seg_list,
+            "bbox": bbox,
+            "bbox_mode": BoxMode.XYXY_ABS,
+        }
+
         record = {
             "file_name": _resolve_image_path(
                 image_root,
@@ -183,18 +237,20 @@ def load_miami2025_json(
             "image_id": image_id,
             "height": height,
             "width":  width,
-            "annotations": [{
-                "iscrowd": 0,
-                "category_id": cat_ids[0] if cat_ids else 0,
-                "segmentation": seg_list,
-            }],
+            "annotations": [ann],
             "ref_id":  ref_id,
             "sentence": sent,
         }
         data.append(record)
 
-    print(f"[miami2025] Built {len(data)} samples for split '{target_split}' "
-          f"(missing_anns={missing_anns})")
+    print(
+        f"[miami2025] Built {len(data)} samples for split '{target_split}' "
+        f"(missing_anns={missing_anns})"
+    )
+    print(
+        f"[miami2025] skipped {stats.get('skipped_due_to_bad_bbox', 0)} invalid bboxes, "
+        f"{stats.get('skipped_empty_sentence', 0)} empty sentences."
+    )
     return data
 
 
