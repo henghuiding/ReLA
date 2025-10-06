@@ -1,3 +1,4 @@
+import datasets.register_miami2025  # noqa: F401
 from detectron2.data import DatasetCatalog
 import os
 
