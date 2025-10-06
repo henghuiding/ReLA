@@ -49,6 +49,8 @@ from gres_model import (
     add_refcoco_config
 )
 
+import datasets.register_miami2025  # noqa: F401
+
 
 class Trainer(DefaultTrainer):
 

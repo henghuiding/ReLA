@@ -1,0 +1,30 @@
+_BASE_: referring_R50.yaml
+
+MODEL:
+  BACKBONE:
+    NAME: "D2SwinTransformer"
+  SWIN:
+    EMBED_DIM: 96
+    DEPTHS: [2, 2, 6, 2]
+    NUM_HEADS: [3, 6, 12, 24]
+    WINDOW_SIZE: 7
+    APE: False
+    DROP_PATH_RATE: 0.3
+    PATCH_NORM: True
+  WEIGHTS: "swin_base_patch4_window12_384_22k.pkl"
+  PIXEL_MEAN: [123.675, 116.280, 103.530]
+  PIXEL_STD: [58.395, 57.120, 57.375]
+
+INPUT:
+  IMAGE_SIZE: 384
+  FORMAT: "RGB"
+
+DATASETS:
+  TRAIN: ("miami2025_train",)
+  TEST: ("miami2025_val",)
+
+SOLVER:
+  IMS_PER_BATCH: 2
+  BASE_LR: 0.0001
+
+OUTPUT_DIR: "outputs/miami2025_swin_tiny"
