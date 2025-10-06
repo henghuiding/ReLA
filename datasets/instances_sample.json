@@ -1,0 +1,280 @@
+{
+  "info": {
+    "description": "This is stable 1.0 version of the 2014 MS COCO dataset.",
+    "url": "http://mscoco.org",
+    "version": "1.0",
+    "year": 2014,
+    "contributor": "Microsoft COCO group",
+    "date_created": "2015-01-27 09:11:52.357475"
+  },
+  "images": [
+    {
+      "license": 1,
+      "file_name": "COCO_train2014_000000098304.jpg",
+      "coco_url": "http://mscoco.org/images/98304",
+      "height": 424,
+      "width": 640,
+      "date_captured": "2013-11-21 23:06:41",
+      "flickr_url": "http://farm6.staticflickr.com/5062/5896644212_a326e96ea9_z.jpg",
+      "id": 98304
+    },
+    {
+      "license": 3,
+      "file_name": "COCO_train2014_000000052461.jpg",
+      "coco_url": "http://mscoco.org/images/52461",
+      "height": 484,
+      "width": 640,
+      "date_captured": "2013-11-17 10:55:11",
+      "flickr_url": "http://farm9.staticflickr.com/8157/7574894824_3cdc8163d9_z.jpg",
+      "id": 52461
+    },
+    {
+      "license": 1,
+      "file_name": "COCO_train2014_000000131074.jpg",
+      "coco_url": "http://mscoco.org/images/131074",
+      "height": 428,
+      "width": 640,
+      "date_captured": "2013-11-21 01:03:06",
+      "flickr_url": "http://farm9.staticflickr.com/8308/7908210548_33e532d119_z.jpg",
+      "id": 131074
+    }
+  ],
+  "annotations": [
+    {
+      "segmentation": [
+        [
+          267.52,
+          229.75,
+          265.6,
+          226.68,
+          265.79,
+          223.6,
+          263.87,
+          220.15,
+          263.87,
+          216.88,
+          266.94,
+          217.07,
+          268.48,
+          221.3,
+          272.32,
+          219.95,
+          276.35,
+          220.15,
+          279.62,
+          218.03,
+          283.46,
+          218.42,
+          285.0,
+          220.92,
+          285.0,
+          223.22,
+          284.42,
+          224.95,
+          280.96,
+          225.14,
+          279.81,
+          226.48,
+          281.73,
+          228.41,
+          279.43,
+          229.37,
+          275.78,
+          229.17,
+          273.86,
+          229.56,
+          274.24,
+          232.05,
+          269.82,
+          231.67,
+          267.14,
+          231.48,
+          266.75,
+          228.6
+        ]
+      ],
+      "area": 197.29899999999986,
+      "iscrowd": 0,
+      "image_id": 98304,
+      "bbox": [
+        263.87,
+        216.88,
+        21.13,
+        15.17
+      ],
+      "category_id": 18,
+      "id": 3007
+    },
+    {
+      "segmentation": [
+        [
+          101.0,
+          413.19,
+          80.07,
+          342.22,
+          71.88,
+          285.81,
+          87.35,
+          249.41,
+          136.48,
+          213.93,
+          182.88,
+          241.22,
+          226.56,
+          254.87,
+          235.66,
+          273.98,
+          240.21,
+          315.83,
+          245.67,
+          351.32,
+          253.85,
+          339.49,
+          244.76,
+          402.27
+        ]
+      ],
+      "area": 27152.935449999997,
+      "iscrowd": 0,
+      "image_id": 98304,
+      "bbox": [
+        71.88,
+        213.93,
+        181.97,
+        199.26
+      ],
+      "category_id": 63,
+      "id": 99893
+    },
+    {
+      "segmentation": [
+        [
+          342.41,
+          294.96,
+          392.36,
+          292.58,
+          425.67,
+          290.99,
+          443.11,
+          288.62,
+          464.51,
+          291.78,
+          454.21,
+          419.44,
+          447.07,
+          416.28,
+          448.66,
+          367.9,
+          428.04,
+          374.25,
+          428.83,
+          383.76,
+          425.67,
+          382.97,
+          422.5,
+          375.84,
+          386.82,
+          379.01,
+          387.61,
+          419.44,
+          379.68,
+          417.07,
+          378.88,
+          376.63,
+          362.23,
+          371.87,
+          355.09,
+          362.36,
+          345.58,
+          352.84,
+          344.79,
+          389.31,
+          338.44,
+          395.66,
+          335.28,
+          394.07,
+          334.49,
+          350.46,
+          335.28,
+          336.98,
+          335.28,
+          329.84,
+          336.86,
+          302.1,
+          336.86,
+          295.75
+        ]
+      ],
+      "area": 11087.449149999997,
+      "iscrowd": 0,
+      "image_id": 98304,
+      "bbox": [
+        334.49,
+        288.62,
+        130.02,
+        130.82
+      ],
+      "category_id": 62,
+      "id": 108703
+    }
+  ],
+  "categories": [
+    {
+      "supercategory": "person",
+      "id": 1,
+      "name": "person"
+    },
+    {
+      "supercategory": "vehicle",
+      "id": 2,
+      "name": "bicycle"
+    },
+    {
+      "supercategory": "vehicle",
+      "id": 3,
+      "name": "car"
+    }
+  ],
+  "licenses": [
+    {
+      "url": "http://creativecommons.org/licenses/by-nc-sa/2.0/",
+      "id": 1,
+      "name": "Attribution-NonCommercial-ShareAlike License"
+    },
+    {
+      "url": "http://creativecommons.org/licenses/by-nc/2.0/",
+      "id": 2,
+      "name": "Attribution-NonCommercial License"
+    },
+    {
+      "url": "http://creativecommons.org/licenses/by-nc-nd/2.0/",
+      "id": 3,
+      "name": "Attribution-NonCommercial-NoDerivs License"
+    },
+    {
+      "url": "http://creativecommons.org/licenses/by/2.0/",
+      "id": 4,
+      "name": "Attribution License"
+    },
+    {
+      "url": "http://creativecommons.org/licenses/by-sa/2.0/",
+      "id": 5,
+      "name": "Attribution-ShareAlike License"
+    },
+    {
+      "url": "http://creativecommons.org/licenses/by-nd/2.0/",
+      "id": 6,
+      "name": "Attribution-NoDerivs License"
+    },
+    {
+      "url": "http://flickr.com/commons/usage/",
+      "id": 7,
+      "name": "No known copyright restrictions"
+    },
+    {
+      "url": "http://www.usa.gov/copyright.shtml",
+      "id": 8,
+      "name": "United States Government Work"
+    }
+  ]
+}
