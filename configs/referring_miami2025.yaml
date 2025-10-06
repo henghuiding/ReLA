@@ -28,3 +28,7 @@ SOLVER:
   BASE_LR: 0.0001
 
 OUTPUT_DIR: "outputs/miami2025_swin_tiny"
+
+REFERRING:
+  BERT_TYPE: /root/autodl-tmp/bert-base-uncased
+  MAX_TOKENS: 20
