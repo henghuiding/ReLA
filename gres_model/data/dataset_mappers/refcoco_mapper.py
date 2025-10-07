@@ -189,7 +189,70 @@ class RefCOCOMapper:
             dataset_dict["gt_mask"] = gt_masks
 
         dataset_dict["empty"] = empty
-        dataset_dict["gt_mask_merged"] = self._merge_masks(gt_masks) if self.merge else None
+
+        # ---- Preserve evaluator-facing metadata and masks ------------------
+        height = dataset_dict.get("height") or image_shape[0]
+        width = dataset_dict.get("width") or image_shape[1]
+        # Build a merged mask that covers polygons when available and
+        # gracefully falls back to bbox rectangles for datasets like Miami2025.
+        anns = dataset_dict.get("annotations", [])
+
+        height_i = int(height) if height else 0
+        width_i = int(width) if width else 0
+
+        polygon_segments = []
+        raster_masks = []
+
+        for ann in anns:
+            seg = ann.get("segmentation")
+            polygons = None
+            if hasattr(seg, "polygons"):
+                polygons = seg.polygons
+            elif isinstance(seg, list) and seg:
+                polygons = seg
+
+            if polygons:
+                for poly in polygons:
+                    if poly:
+                        polygon_segments.append(poly)
+                continue
+
+            if ("bbox" in ann) and height_i and width_i:
+                bbox = ann["bbox"]
+                bbox_mode = ann.get("bbox_mode", BoxMode.XYXY_ABS)
+                x0, y0, x1, y1 = BoxMode.convert(bbox, bbox_mode, BoxMode.XYXY_ABS)
+                x0 = max(0, min(int(np.floor(x0)), width_i))
+                y0 = max(0, min(int(np.floor(y0)), height_i))
+                x1 = max(x0, min(int(np.ceil(x1)), width_i))
+                y1 = max(y0, min(int(np.ceil(y1)), height_i))
+                if x1 > x0 and y1 > y0:
+                    m = np.zeros((height_i, width_i), dtype=np.uint8)
+                    m[y0:y1, x0:x1] = 1
+                    raster_masks.append(m)
+
+        mask_height = height_i if height_i > 0 else 1
+        mask_width = width_i if width_i > 0 else 1
+        merged_mask = np.zeros((mask_height, mask_width), dtype=np.uint8)
+
+        if polygon_segments and height_i and width_i:
+            try:
+                rles = coco_mask.frPyObjects(polygon_segments, height_i, width_i)
+                rle = coco_mask.merge(rles)
+                decoded = coco_mask.decode(rle)
+                if decoded.ndim == 3:
+                    decoded = decoded[..., 0]
+                merged_mask = np.maximum(merged_mask, decoded.astype("uint8"))
+            except Exception:  # pragma: no cover - best-effort decoding
+                pass
+
+        if raster_masks:
+            try:
+                raster_merged = np.clip(np.sum(raster_masks, axis=0), 0, 1).astype("uint8")
+                merged_mask = np.maximum(merged_mask, raster_merged)
+            except Exception:  # pragma: no cover - sum fallback
+                pass
+
+        dataset_dict["gt_mask_merged"] = merged_mask
 
 
         # Language data
@@ -235,6 +298,18 @@ class RefCOCOMapper:
         dataset_dict['lang_tokens'] = torch.tensor(padded_input_ids).unsqueeze(0)
         dataset_dict['lang_mask'] = torch.tensor(attention_mask).unsqueeze(0)
 
+        # ---- Preserve essential fields for downstream evaluator ------------
         dataset_dict["source"] = _src
+        try:
+            dataset_dict["ref_id"] = int(dataset_dict.get("ref_id", -1))
+        except (TypeError, ValueError):
+            dataset_dict["ref_id"] = -1
+        if "sentence_info" not in dataset_dict:
+            dataset_dict["sentence_info"] = sentence_field
+
+        sent = sentence_raw
+        if not isinstance(sent, str):
+            sent = str(sent) if sent is not None else ""
+        dataset_dict["sentence"] = sent
 
         return dataset_dict
