@@ -130,6 +130,7 @@ class RefCOCOMapper:
 
     def __call__(self, dataset_dict):
         dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
+        _src = dataset_dict.get("source", "miami2025")
         image = utils.read_image(dataset_dict["file_name"], format=self.img_format)
         utils.check_image_size(dataset_dict, image)
 
@@ -233,5 +234,7 @@ class RefCOCOMapper:
 
         dataset_dict['lang_tokens'] = torch.tensor(padded_input_ids).unsqueeze(0)
         dataset_dict['lang_mask'] = torch.tensor(attention_mask).unsqueeze(0)
+
+        dataset_dict["source"] = _src
 
         return dataset_dict
