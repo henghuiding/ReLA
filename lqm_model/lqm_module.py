@@ -67,6 +67,33 @@ class LQMFormer(GRES):
         self.dqm_q_upd: Optional[torch.Tensor] = None
         self.dqm_pairwise: Optional[torch.Tensor] = None
 
+        self._init_lqm(self.lqm_cfg)
+
+    def _init_lqm(self, cfg: CN) -> None:
+        """Initialize DQM-related flags and log the configuration state."""
+
+        if isinstance(cfg, CN):
+            dqm_cfg = cfg.get("DQM", CN())
+        elif isinstance(cfg, dict):
+            dqm_cfg = cfg.get("DQM", {})
+        else:
+            dqm_cfg = CN()
+
+        if isinstance(dqm_cfg, dict):
+            dqm_cfg = CN(dqm_cfg)
+
+        enable = bool(dqm_cfg.get("ENABLE", dqm_cfg.get("ENABLED", self.dqm_enabled)))
+        self.dqm_enable = enable
+        self.dqm_enabled = enable
+
+        top_p = dqm_cfg.get("TOP_P", self.dqm_top_p)
+        nq = dqm_cfg.get("NQ", dqm_cfg.get("NUM_QUERIES", "unknown"))
+
+        if enable:
+            print(f"[LQMFormer] Initializing DQM with TOP_P={top_p}, NQ={nq}")
+        else:
+            print("[LQMFormer] DQM disabled — running in GRES mode.")
+
     @classmethod
     def from_config(cls, cfg) -> Dict[str, Any]:
         config_dict = super().from_config(cfg)
