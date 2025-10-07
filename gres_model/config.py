@@ -3,6 +3,18 @@
 from detectron2.config import CfgNode as CN
 
 
+def add_lqm_config(cfg):
+    """Add LQM (Language-aware Query Modulation) configs to Detectron2 cfg."""
+
+    cfg.LQM = CN()
+    cfg.LQM.DQM = CN()
+    cfg.LQM.DQM.ENABLE = False
+    cfg.LQM.DQM.TOP_P = 0.2
+    cfg.LQM.DQM.NQ = 100
+    cfg.LQM.DQM.LOSS_WEIGHT = 1.0
+    cfg.LQM.DQM.SCORE_DIM = 256
+
+
 def add_maskformer2_config(cfg):
     """
     Add config for MASK_FORMER.
@@ -137,3 +149,9 @@ def add_refcoco_config(cfg):
     cfg.REFERRING = CN()
     cfg.REFERRING.BERT_TYPE = "bert-base-uncased"
     cfg.REFERRING.MAX_TOKENS = 20
+
+
+def add_gres_config(cfg):
+    add_maskformer2_config(cfg)
+    add_refcoco_config(cfg)
+    add_lqm_config(cfg)
