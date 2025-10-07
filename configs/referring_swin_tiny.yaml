@@ -1,4 +1,4 @@
-_BASE_: referring_R50.yaml
+_BASE_: Base-Swin.yaml
 MODEL:
   BACKBONE:
     NAME: "D2SwinTransformer"
