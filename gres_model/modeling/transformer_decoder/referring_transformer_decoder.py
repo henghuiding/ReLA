@@ -378,7 +378,16 @@ class MultiScaleMaskedReferringDecoder(nn.Module):
 
         # QxNxC
         query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, bs, 1)
-        output = self.query_feat.weight.unsqueeze(1).repeat(1, bs, 1)
+
+        query_override = getattr(self, "_lqm_override", None)
+        if query_override is not None:
+            if query_override.dim() != 3 or query_override.shape[0] != bs:
+                raise ValueError(
+                    "_lqm_override must have shape (batch, num_queries, dim) matching the current batch"
+                )
+            output = query_override.permute(1, 0, 2).contiguous()
+        else:
+            output = self.query_feat.weight.unsqueeze(1).repeat(1, bs, 1)
 
         predictions_class = []
         predictions_mask = []
