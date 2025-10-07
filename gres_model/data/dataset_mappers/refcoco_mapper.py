@@ -189,7 +189,38 @@ class RefCOCOMapper:
             dataset_dict["gt_mask"] = gt_masks
 
         dataset_dict["empty"] = empty
-        dataset_dict["gt_mask_merged"] = self._merge_masks(gt_masks) if self.merge else None
+
+        # ---- Preserve evaluator-facing metadata and masks ------------------
+        height = dataset_dict.get("height") or image_shape[0]
+        width = dataset_dict.get("width") or image_shape[1]
+        anns = dataset_dict.get("annotations", [])
+        polygons = []
+        for ann in anns:
+            seg = ann.get("segmentation")
+            if isinstance(seg, list) and seg:
+                if isinstance(seg[0], list):
+                    polygons.extend(seg)
+                else:
+                    polygons.append(seg)
+
+        merged_mask = None
+        if polygons and height and width:
+            try:
+                rles = coco_mask.frPyObjects(polygons, int(height), int(width))
+                rle = coco_mask.merge(rles)
+                decoded = coco_mask.decode(rle)
+                if decoded.ndim == 3:
+                    decoded = decoded[..., 0]
+                merged_mask = decoded.astype("uint8")
+            except Exception:  # pragma: no cover - best-effort decoding
+                merged_mask = None
+
+        if merged_mask is None:
+            h = int(height) if height else 1
+            w = int(width) if width else 1
+            merged_mask = np.zeros((h, w), dtype="uint8")
+
+        dataset_dict["gt_mask_merged"] = merged_mask
 
 
         # Language data
@@ -235,6 +266,18 @@ class RefCOCOMapper:
         dataset_dict['lang_tokens'] = torch.tensor(padded_input_ids).unsqueeze(0)
         dataset_dict['lang_mask'] = torch.tensor(attention_mask).unsqueeze(0)
 
+        # ---- Preserve essential fields for downstream evaluator ------------
         dataset_dict["source"] = _src
+        try:
+            dataset_dict["ref_id"] = int(dataset_dict.get("ref_id", -1))
+        except (TypeError, ValueError):
+            dataset_dict["ref_id"] = -1
+        if "sentence_info" not in dataset_dict:
+            dataset_dict["sentence_info"] = sentence_field
+
+        sent = sentence_raw
+        if not isinstance(sent, str):
+            sent = str(sent) if sent is not None else ""
+        dataset_dict["sentence"] = sent
 
         return dataset_dict
