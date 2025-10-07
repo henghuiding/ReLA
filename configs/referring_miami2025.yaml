@@ -1,4 +1,4 @@
-_BASE_: referring_R50.yaml
+_BASE_: referring_swin_tiny.yaml
 
 MODEL:
   BACKBONE:
