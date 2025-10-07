@@ -61,6 +61,16 @@ def add_maskformer2_config(cfg):
     cfg.MODEL.MASK_FORMER.TEST.OVERLAP_THRESHOLD = 0.0
     cfg.MODEL.MASK_FORMER.TEST.SEM_SEG_POSTPROCESSING_BEFORE_INFERENCE = False
 
+    cfg.MODEL.MASK_FORMER.DQM = CN()
+    cfg.MODEL.MASK_FORMER.DQM.ENABLED = False
+    cfg.MODEL.MASK_FORMER.DQM.NUM_HEADS = 8
+    cfg.MODEL.MASK_FORMER.DQM.HIDDEN_DIM = 256
+    cfg.MODEL.MASK_FORMER.DQM.SCORE_HIDDEN_DIM = 256
+    cfg.MODEL.MASK_FORMER.DQM.SCORE_ACTIVATION = "sigmoid"
+    cfg.MODEL.MASK_FORMER.DQM.APPLY_TO_MASKS = False
+    cfg.MODEL.MASK_FORMER.DQM.APPLY_TO_LOGITS = False
+    cfg.MODEL.MASK_FORMER.DQM.DROPOUT = 0.0
+
     # Sometimes `backbone.size_divisibility` is set to 0 for some backbone (e.g. ResNet)
     # you can use this config to override
     cfg.MODEL.MASK_FORMER.SIZE_DIVISIBILITY = 32
