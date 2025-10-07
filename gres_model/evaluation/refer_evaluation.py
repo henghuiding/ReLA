@@ -32,6 +32,8 @@ class ReferEvaluator(DatasetEvaluator):
         self._save_imgs = save_imgs
 
         self._cpu_device = torch.device("cpu")
+        self._warned_missing_source = False
+        self._warned_missing_gt_mask = False
 
         default_sources = [
             "refcoco",
@@ -54,7 +56,14 @@ class ReferEvaluator(DatasetEvaluator):
         for input, output in zip(inputs, outputs):
 
             img_id = input['image_id']
-            src = input.get('source') or "miami2025"
+            src = input.get('source')
+            if not src:
+                if not self._warned_missing_source:
+                    self._logger.warning(
+                        "[ReferEvaluator] Missing 'source' in inputs; defaulting to 'miami2025'"
+                    )
+                    self._warned_missing_source = True
+                src = "miami2025"
             if src not in self._known_sources:
                 self._known_sources.add(src)
                 self._available_sources.append(src)
@@ -65,21 +74,55 @@ class ReferEvaluator(DatasetEvaluator):
             # output mask
             output_mask = output["ref_seg"].argmax(dim=0).to(self._cpu_device)
             pred_mask = np.array(output_mask, dtype=np.int8)
-            gt_mask = input['gt_mask_merged'].to(self._cpu_device)
-            gt = np.array(gt_mask, dtype=np.int8)
+            gt_mask_data = input.get('gt_mask_merged')
+            if isinstance(gt_mask_data, torch.Tensor):
+                gt_mask_data = gt_mask_data.to(self._cpu_device).numpy()
+            elif isinstance(gt_mask_data, np.ndarray):
+                pass
+            elif gt_mask_data is None:
+                if not self._warned_missing_gt_mask:
+                    self._logger.warning(
+                        "[ReferEvaluator] Missing 'gt_mask_merged'; using zeros"
+                    )
+                    self._warned_missing_gt_mask = True
+                height = input.get('height') or pred_mask.shape[0]
+                width = input.get('width') or (
+                    pred_mask.shape[1] if pred_mask.ndim > 1 else pred_mask.shape[0]
+                )
+                gt_mask_data = np.zeros((height, width), dtype=np.uint8)
+            else:
+                gt_mask_data = np.array(gt_mask_data, dtype=np.uint8)
+            gt = np.array(gt_mask_data, dtype=np.int8)
 
             # output NT label
             output_nt = output["nt_label"].argmax(dim=0).bool().to(self._cpu_device)
             pred_nt = bool(output_nt)
 
+            sentence_info = input.get('sentence')
+            sent_text = ""
+            if isinstance(sentence_info, dict):
+                sent_text = (
+                    sentence_info.get('raw')
+                    or sentence_info.get('sent')
+                    or ""
+                )
+            elif isinstance(sentence_info, str):
+                sent_text = sentence_info
+            elif sentence_info is not None:
+                sent_text = str(sentence_info)
+
+            sent_info_payload = input.get('sentence_info', sentence_info)
+            if isinstance(sent_info_payload, str):
+                sent_info_payload = {"raw": sent_info_payload}
+
             self._predictions.append({
                 'img_id': img_id,
                 'source': src,
-                'sent': input['sentence']['raw'],
-                'sent_info':input['sentence'],
+                'sent': sent_text,
+                'sent_info': sent_info_payload,
                 'pred_nt': pred_nt,
                 'gt_nt': input.get('empty', False),
-                'pred_mask': pred_mask, 
+                'pred_mask': pred_mask,
                 'gt_mask': gt
                 })
 
