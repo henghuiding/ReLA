@@ -53,6 +53,8 @@ from gres_model import (
 
 import datasets.register_miami2025  # noqa: F401
 
+# ✅ 强制注册 LQMFormer 进入 Detectron2
+import lqm_model.lqm_module  # noqa: F401
 
 class Trainer(DefaultTrainer):
 
