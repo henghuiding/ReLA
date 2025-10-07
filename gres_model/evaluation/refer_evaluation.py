@@ -3,7 +3,7 @@ import json
 import logging
 import numpy as np
 import os
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 import torch
 
 from detectron2.utils.comm import all_gather, is_main_process, synchronize
@@ -32,7 +32,18 @@ class ReferEvaluator(DatasetEvaluator):
         self._save_imgs = save_imgs
 
         self._cpu_device = torch.device("cpu")
-        self._available_sources = ["refcoco", "grefcoco"]
+
+        default_sources = [
+            "refcoco",
+            "grefcoco",
+            "unc",
+            "google",
+            "refcocog",
+            "miami2025",
+        ]
+        # maintain deterministic order while supporting fast membership lookups
+        self._available_sources = list(dict.fromkeys(default_sources))
+        self._known_sources = set(self._available_sources)
 
         self._num_classes = 2
 
@@ -43,8 +54,13 @@ class ReferEvaluator(DatasetEvaluator):
         for input, output in zip(inputs, outputs):
 
             img_id = input['image_id']
-            src = input['source']
-            assert src in self._available_sources
+            src = input.get('source') or "miami2025"
+            if src not in self._known_sources:
+                self._known_sources.add(src)
+                self._available_sources.append(src)
+                self._logger.warning(
+                    f"[ReferEvaluator] Unknown source '{src}' seen; added dynamically."
+                )
 
             # output mask
             output_mask = output["ref_seg"].argmax(dim=0).to(self._cpu_device)
@@ -86,24 +102,21 @@ class ReferEvaluator(DatasetEvaluator):
         
         pr_thres = [.7, .8, .9]
 
-        accum_I = {}
-        accum_U = {}
-        accum_IoU = {}
-        pr_count = {}
-        total_count = {}
-        not_empty_count = {}
-        empty_count = {}
-        nt = {}
+        accum_I = defaultdict(float)
+        accum_U = defaultdict(float)
+        accum_IoU = defaultdict(float)
+        pr_count = defaultdict(lambda: {thres: 0 for thres in pr_thres})
+        total_count = defaultdict(int)
+        not_empty_count = defaultdict(int)
+        empty_count = defaultdict(int)
+        nt = defaultdict(lambda: {"TP": 0, "TN": 0, "FP": 0, "FN": 0})
 
-        for src in self._available_sources:
-            accum_I[src] = 0
-            accum_U[src] = 0
-            accum_IoU[src] = 0
-
-            pr_count[src] = {}
-            for thres in pr_thres:
-                pr_count[src][thres] = 0
-
+        for src in list(self._available_sources):
+            # touch every key to keep deterministic ordering for existing sources
+            _ = accum_I[src]
+            _ = accum_U[src]
+            _ = accum_IoU[src]
+            pr_count[src] = {thres: 0 for thres in pr_thres}
             total_count[src] = 0
             not_empty_count[src] = 0
             empty_count[src] = 0
@@ -113,7 +126,12 @@ class ReferEvaluator(DatasetEvaluator):
 
         for eval_sample in predictions:
             src = eval_sample['source']
-            assert src in self._available_sources
+            if src not in self._known_sources:
+                self._known_sources.add(src)
+                self._available_sources.append(src)
+                self._logger.warning(
+                    f"[ReferEvaluator] Unknown source '{src}' seen during evaluation; added dynamically."
+                )
 
             ref_result = {}
             ref_result['source'] = src
