@@ -192,7 +192,35 @@ class RefCOCOMapper:
 
 
         # Language data
-        sentence_raw = dataset_dict['sentence']['raw']
+        dataset_name = dataset_dict.get("dataset_name", "") or ""
+        sentence_field = dataset_dict.get("sentence", "")
+
+        if "miami2025" in dataset_name:
+            if isinstance(sentence_field, dict):
+                sentence_raw = (
+                    sentence_field.get("raw")
+                    or sentence_field.get("sent")
+                    or ""
+                )
+            else:
+                sentence_raw = str(sentence_field)
+        else:
+            if isinstance(sentence_field, dict):
+                sentence_raw = sentence_field.get("raw", "")
+            else:
+                sentence_raw = str(sentence_field)
+
+        if not sentence_raw and dataset_dict.get("sentences"):
+            first_sentence = dataset_dict["sentences"][0]
+            if isinstance(first_sentence, dict):
+                sentence_raw = (
+                    first_sentence.get("raw")
+                    or first_sentence.get("sent")
+                    or ""
+                )
+            elif isinstance(first_sentence, str):
+                sentence_raw = first_sentence
+
         attention_mask = [0] * self.max_tokens
         padded_input_ids = [0] * self.max_tokens
 
