@@ -1,6 +1,8 @@
-import datasets.register_miami2025  # noqa: F401
-from detectron2.data import DatasetCatalog
 import os
+
+from detectron2.data import DatasetCatalog
+
+from datasets.register_miami2025 import register_miami2025
 
 
 def check(name):
@@ -21,7 +23,12 @@ def check(name):
 
 
 if __name__ == "__main__":
-    for name in ["miami2025_train", "miami2025_val", "miami2025_testA", "miami2025_testB"]:
+    required = ("miami2025_train", "miami2025_val")
+
+    if not set(required).issubset(set(DatasetCatalog.list())):
+        register_miami2025()
+
+    for name in required:
         try:
             check(name)
         except KeyError:

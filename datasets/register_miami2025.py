@@ -159,7 +159,9 @@ def load_miami2025_json(
     json_file: str,
     image_root: str,
     inst_json: str,
-    target_split: str
+    target_split: str,
+    *,
+    dataset_name: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Load miami2025 + instances COCO annotations and build Detectron2 dicts."""
     with open(json_file, "r") as f:
@@ -241,6 +243,8 @@ def load_miami2025_json(
             "ref_id":  ref_id,
             "sentence": sent,
         }
+        if dataset_name:
+            record["dataset_name"] = dataset_name
         data.append(record)
 
     print(
@@ -254,7 +258,11 @@ def load_miami2025_json(
     return data
 
 
-def register_miami2025(root: str = "/autodl-tmp/rela_data"):
+def register_miami2025(
+    root: str = "/autodl-tmp/rela_data",
+    *,
+    splits: Optional[List[str]] = None,
+):
     """
     Register miami2025 splits using the real AutoDL paths by default.
     Environment override:
@@ -277,11 +285,30 @@ def register_miami2025(root: str = "/autodl-tmp/rela_data"):
     print(f"[miami2025] inst_json={inst_json}")
     print(f"[miami2025] image_root={image_root}")
 
-    for split in ["train", "val", "testA", "testB"]:
+    if splits is None:
+        splits = ["train", "val"]
+    else:
+        splits = list(splits)
+
+    for split in splits:
         name = f"miami2025_{split}"
+        if name in DatasetCatalog.list():
+            MetadataCatalog.get(name).set(
+                image_root=image_root,
+                evaluator_type="refcoco",
+                json_file=json_file,
+                inst_json=inst_json,
+            )
+            continue
         DatasetCatalog.register(
             name,
-            lambda s=split: load_miami2025_json(json_file, image_root, inst_json, s)
+            lambda s=split, ds_name=name: load_miami2025_json(
+                json_file,
+                image_root,
+                inst_json,
+                s,
+                dataset_name=ds_name,
+            )
         )
         MetadataCatalog.get(name).set(
             image_root=image_root,
@@ -291,8 +318,14 @@ def register_miami2025(root: str = "/autodl-tmp/rela_data"):
         )
 
 
-# Auto-register on import
-register_miami2025()
+def _ensure_default_registration():
+    required = ("miami2025_train", "miami2025_val")
+    if not set(required).issubset(set(DatasetCatalog.list())):
+        register_miami2025()
+
+
+# Auto-register on import if needed
+_ensure_default_registration()
 
 
 if __name__ == "__main__":

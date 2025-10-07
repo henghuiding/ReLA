@@ -3,6 +3,13 @@ _BASE_: referring_miami2025.yaml
 MODEL:
   META_ARCHITECTURE: "LQMFormer"
 
+DATASETS:
+  TRAIN: ("miami2025_train",)
+  TEST: ("miami2025_val",)
+
+INPUT:
+  FORMAT: "RGB"
+
 LQM:
   DQM:
     ENABLE: True
