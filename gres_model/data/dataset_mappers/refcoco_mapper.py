@@ -199,22 +199,42 @@ class RefCOCOMapper:
         # gracefully falls back to bbox rectangles for datasets like Miami2025.
         anns = dataset_dict.get("annotations", [])
 
-        def _safe_hw(h_default, w_default):
+        def _safe_hw(h_default, w_default, fallback_shape):
             """Return positive integer height/width for mask rasterization."""
-            h = int(h_default) if h_default and int(h_default) > 0 else 0
-            w = int(w_default) if w_default and int(w_default) > 0 else 0
+
+            def _normalize(value):
+                try:
+                    value_i = int(value)
+                except (TypeError, ValueError):
+                    value_i = 0
+                return value_i
+
+            h = _normalize(h_default)
+            w = _normalize(w_default)
+
+            fallback_h = 0
+            fallback_w = 0
+            if fallback_shape:
+                if len(fallback_shape) >= 1 and fallback_shape[0] and fallback_shape[0] > 0:
+                    fallback_h = int(fallback_shape[0])
+                if len(fallback_shape) >= 2 and fallback_shape[1] and fallback_shape[1] > 0:
+                    fallback_w = int(fallback_shape[1])
+
+            h = h if h > 0 else fallback_h
+            w = w if w > 0 else fallback_w
+
             if h <= 0:
-                h = int(image_shape[0]) if image_shape and image_shape[0] > 0 else 1
+                h = 1
             if w <= 0:
-                w = int(image_shape[1]) if image_shape and image_shape[1] > 0 else 1
+                w = 1
             return h, w
 
-        height_i, width_i = _safe_hw(height, width)
+        mask_height, mask_width = _safe_hw(height, width, image_shape)
 
         polygon_segments = []
         raster_masks = []
 
-        for ann in anns:
+        for ann in anns or []:
             seg = ann.get("segmentation")
             polygons = None
             if hasattr(seg, "polygons"):
@@ -228,20 +248,15 @@ class RefCOCOMapper:
                     if isinstance(poly, (list, np.ndarray)):
                         try:
                             if len(poly) >= 6:
-                                try:
-                                    flattened = np.asarray(poly, dtype=np.float32).reshape(-1)
-                                except (TypeError, ValueError) as exc:
-                                    logger.warning(
-                                        "Failed to normalize polygon segmentation due to %s; skipping.",
-                                        exc,
-                                    )
-                                else:
-                                    if flattened.size >= 6 and np.all(np.isfinite(flattened)):
-                                        polygon_segments.append(flattened.tolist())
-                                        valid_poly = True
-                        except TypeError:
-                            # Objects without a length fall through to warning below.
-                            pass
+                                flattened = np.asarray(poly, dtype=np.float32).reshape(-1)
+                                if flattened.size >= 6 and np.all(np.isfinite(flattened)):
+                                    polygon_segments.append(flattened.tolist())
+                                    valid_poly = True
+                        except (TypeError, ValueError) as exc:
+                            logger.warning(
+                                "Failed to normalize polygon segmentation due to %s; skipping.",
+                                exc,
+                            )
                     if not valid_poly:
                         logger.warning(
                             "Skipping invalid polygon segmentation for annotation %s in %s.",
@@ -250,25 +265,38 @@ class RefCOCOMapper:
                         )
                 continue
 
-            if ("bbox" in ann) and height_i and width_i:
+            if isinstance(seg, dict) and seg.get("counts") and mask_height and mask_width:
+                try:
+                    decoded = coco_mask.decode(seg)
+                except Exception:  # pragma: no cover - best-effort decode
+                    decoded = None
+                if decoded is not None:
+                    decoded = np.asarray(decoded, dtype=np.uint8)
+                    if decoded.ndim == 3:
+                        decoded = decoded[..., 0]
+                    if decoded.shape != (mask_height, mask_width):
+                        decoded = np.zeros((mask_height, mask_width), dtype=np.uint8)
+                    raster_masks.append(decoded)
+                continue
+
+            if ("bbox" in ann) and mask_height and mask_width:
                 bbox = ann["bbox"]
                 bbox_mode = ann.get("bbox_mode", BoxMode.XYXY_ABS)
                 x0, y0, x1, y1 = BoxMode.convert(bbox, bbox_mode, BoxMode.XYXY_ABS)
-                x0 = max(0, min(int(np.floor(x0)), width_i))
-                y0 = max(0, min(int(np.floor(y0)), height_i))
-                x1 = max(x0, min(int(np.ceil(x1)), width_i))
-                y1 = max(y0, min(int(np.ceil(y1)), height_i))
+                x0 = max(0, min(int(np.floor(x0)), mask_width))
+                y0 = max(0, min(int(np.floor(y0)), mask_height))
+                x1 = max(x0, min(int(np.ceil(x1)), mask_width))
+                y1 = max(y0, min(int(np.ceil(y1)), mask_height))
                 if x1 > x0 and y1 > y0:
-                    m = np.zeros((height_i, width_i), dtype=np.uint8)
+                    m = np.zeros((mask_height, mask_width), dtype=np.uint8)
                     m[y0:y1, x0:x1] = 1
                     raster_masks.append(m)
 
-        mask_height, mask_width = height_i, width_i
         merged_mask = np.zeros((mask_height, mask_width), dtype=np.uint8)
 
-        if polygon_segments and height_i and width_i:
+        if polygon_segments and mask_height and mask_width:
             try:
-                rles = coco_mask.frPyObjects(polygon_segments, height_i, width_i)
+                rles = coco_mask.frPyObjects(polygon_segments, mask_height, mask_width)
                 rle = coco_mask.merge(rles)
                 decoded = coco_mask.decode(rle)
                 if decoded.ndim == 3:
@@ -284,18 +312,14 @@ class RefCOCOMapper:
             except Exception:  # pragma: no cover - sum fallback
                 pass
 
-        expected_shape = (mask_height, mask_width)
-        if merged_mask is None:
-            merged_mask = np.zeros(expected_shape, dtype=np.uint8)
-        else:
-            merged_mask = np.asarray(merged_mask, dtype=np.uint8)
-            if merged_mask.ndim == 3:
-                merged_mask = merged_mask.reshape(merged_mask.shape[-2], merged_mask.shape[-1])
-            if merged_mask.shape != expected_shape:
-                merged_mask = np.zeros(expected_shape, dtype=np.uint8)
+        merged_mask = np.asarray(merged_mask, dtype=np.uint8)
+        if merged_mask.ndim == 3:
+            merged_mask = merged_mask.reshape(merged_mask.shape[-2], merged_mask.shape[-1])
+        if merged_mask.shape != (mask_height, mask_width):
+            merged_mask = np.zeros((mask_height, mask_width), dtype=np.uint8)
 
         if self.is_train:
-            dataset_dict["gt_mask_merged"] = torch.as_tensor(merged_mask.copy()).unsqueeze(0)
+            dataset_dict["gt_mask_merged"] = torch.from_numpy(merged_mask.copy()).unsqueeze(0)
         else:
             dataset_dict["gt_mask_merged"] = merged_mask
 
