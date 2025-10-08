@@ -4,6 +4,12 @@ import logging
 
 import numpy as np
 import torch
+import torch.nn.functional as F
+
+try:
+    import cv2  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    cv2 = None
 
 from detectron2.config import configurable
 from detectron2.data import detection_utils as utils
@@ -130,6 +136,133 @@ class RefCOCOMapper:
     def _merge_masks(x):
         return x.sum(dim=0, keepdim=True).clamp(max=1)
 
+    @staticmethod
+    def _normalize_hw(height, width, fallback_shape):
+        def _safe_int(value, default=0):
+            try:
+                value_i = int(value)
+            except (TypeError, ValueError):
+                value_i = default
+            return value_i if value_i > 0 else default
+
+        h = _safe_int(height)
+        w = _safe_int(width)
+
+        fallback_h = 0
+        fallback_w = 0
+        if fallback_shape is not None:
+            if len(fallback_shape) >= 1:
+                fallback_h = _safe_int(fallback_shape[0])
+            if len(fallback_shape) >= 2:
+                fallback_w = _safe_int(fallback_shape[1])
+
+        h = h or fallback_h or 1
+        w = w or fallback_w or 1
+        return h, w
+
+    @staticmethod
+    def _decode_annotation_mask(ann, height, width):
+        seg = ann.get("segmentation")
+        polygons = None
+        if hasattr(seg, "polygons"):
+            polygons = seg.polygons
+        elif isinstance(seg, list) and seg:
+            polygons = seg
+
+        if polygons:
+            try:
+                rles = coco_mask.frPyObjects(polygons, height, width)
+                decoded = coco_mask.decode(rles)
+                if decoded.ndim == 3:
+                    decoded = decoded.max(axis=2)
+                decoded = np.asarray(decoded, dtype=np.uint8)
+                decoded = RefCOCOMapper._resize_mask(decoded, height, width)
+                if decoded is None:
+                    return None
+                return (decoded > 0).astype(np.uint8)
+            except Exception as exc:  # pragma: no cover
+                logger.warning(
+                    "Failed to decode polygon segmentation for ann %s: %s",
+                    ann.get("id", "<unknown>"),
+                    exc,
+                )
+
+        if isinstance(seg, dict) and seg.get("counts"):
+            try:
+                decoded = coco_mask.decode(seg)
+            except Exception as exc:  # pragma: no cover
+                logger.warning(
+                    "Failed to decode RLE segmentation for ann %s: %s",
+                    ann.get("id", "<unknown>"),
+                    exc,
+                )
+                decoded = None
+            if decoded is not None:
+                if decoded.ndim == 3:
+                    decoded = decoded.max(axis=2)
+                decoded = np.asarray(decoded, dtype=np.uint8)
+                decoded = RefCOCOMapper._resize_mask(decoded, height, width)
+                if decoded is None:
+                    return None
+                return (decoded > 0).astype(np.uint8)
+
+        return None
+
+    @staticmethod
+    def _bbox_to_mask(ann, height, width):
+        if "bbox" not in ann:
+            return None
+
+        bbox_mode = ann.get("bbox_mode", BoxMode.XYXY_ABS)
+        x0, y0, x1, y1 = BoxMode.convert(ann["bbox"], bbox_mode, BoxMode.XYXY_ABS)
+        x0 = max(0, min(int(np.floor(x0)), width))
+        y0 = max(0, min(int(np.floor(y0)), height))
+        x1 = max(0, min(int(np.ceil(x1)), width))
+        y1 = max(0, min(int(np.ceil(y1)), height))
+        if x1 <= x0 or y1 <= y0:
+            return None
+
+        mask = np.zeros((height, width), dtype=np.uint8)
+        mask[y0:y1, x0:x1] = 1
+        return mask
+
+    def _synthesize_mask(self, dataset_dict):
+        fallback_shape = None
+        image = dataset_dict.get("image")
+        if torch.is_tensor(image):
+            fallback_shape = (int(image.shape[-2]), int(image.shape[-1]))
+        elif isinstance(image, np.ndarray):
+            fallback_shape = image.shape[:2]
+
+        height, width = self._normalize_hw(
+            dataset_dict.get("height"),
+            dataset_dict.get("width"),
+            fallback_shape,
+        )
+
+        anns = dataset_dict.get("annotations", []) or []
+
+        merged_mask = np.zeros((height, width), dtype=np.uint8)
+        any_positive = False
+        for ann in anns:
+            mask = self._decode_annotation_mask(ann, height, width)
+            if mask is None:
+                mask = self._bbox_to_mask(ann, height, width)
+            if mask is None:
+                continue
+            any_positive = any_positive or mask.sum() > 0
+            merged_mask = np.maximum(merged_mask, mask)
+
+        if not any_positive and anns:
+            for ann in anns:
+                mask = self._bbox_to_mask(ann, height, width)
+                if mask is not None:
+                    merged_mask = np.maximum(merged_mask, mask)
+
+        merged_mask = (merged_mask > 0).astype(np.uint8)
+        dataset_dict["height"], dataset_dict["width"] = height, width
+        return merged_mask
+
     def __call__(self, dataset_dict):
         dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
         _src = dataset_dict.get("source", "miami2025")
@@ -152,6 +285,7 @@ class RefCOCOMapper:
         # Therefore it's important to use torch.Tensor.
         dataset_dict["image"] = torch.as_tensor(np.ascontiguousarray(image.transpose(2, 0, 1)))
         dataset_dict["padding_mask"] = torch.as_tensor(np.ascontiguousarray(padding_mask))
+        dataset_dict["height"], dataset_dict["width"] = image_shape
 
         # USER: Implement additional transformations if you have other types of data
         annos = []
@@ -185,144 +319,18 @@ class RefCOCOMapper:
             gt_masks = torch.zeros((0, image_shape[0], image_shape[1]), dtype=torch.uint8)
             instances.gt_masks = gt_masks
 
+        merged_mask = self._synthesize_mask(dataset_dict)
+        if self.is_train:
+            dataset_dict["gt_mask_merged"] = torch.from_numpy(merged_mask.copy()).unsqueeze(0)
+        else:
+            dataset_dict["gt_mask_merged"] = merged_mask
+
         if self.is_train:
             dataset_dict["instances"] = instances
         else:
             dataset_dict["gt_mask"] = gt_masks
 
         dataset_dict["empty"] = empty
-
-        # ---- Preserve evaluator-facing metadata and masks ------------------
-        height = dataset_dict.get("height") or image_shape[0]
-        width = dataset_dict.get("width") or image_shape[1]
-        # Build a merged mask that covers polygons when available and
-        # gracefully falls back to bbox rectangles for datasets like Miami2025.
-        anns = dataset_dict.get("annotations", [])
-
-        def _safe_hw(h_default, w_default, fallback_shape):
-            """Return positive integer height/width for mask rasterization."""
-
-            def _normalize(value):
-                try:
-                    value_i = int(value)
-                except (TypeError, ValueError):
-                    value_i = 0
-                return value_i
-
-            h = _normalize(h_default)
-            w = _normalize(w_default)
-
-            fallback_h = 0
-            fallback_w = 0
-            if fallback_shape:
-                if len(fallback_shape) >= 1 and fallback_shape[0] and fallback_shape[0] > 0:
-                    fallback_h = int(fallback_shape[0])
-                if len(fallback_shape) >= 2 and fallback_shape[1] and fallback_shape[1] > 0:
-                    fallback_w = int(fallback_shape[1])
-
-            h = h if h > 0 else fallback_h
-            w = w if w > 0 else fallback_w
-
-            if h <= 0:
-                h = 1
-            if w <= 0:
-                w = 1
-            return h, w
-
-        mask_height, mask_width = _safe_hw(height, width, image_shape)
-
-        polygon_segments = []
-        raster_masks = []
-
-        for ann in anns or []:
-            seg = ann.get("segmentation")
-            polygons = None
-            if hasattr(seg, "polygons"):
-                polygons = seg.polygons
-            elif isinstance(seg, list) and seg:
-                polygons = seg
-
-            if polygons:
-                for poly in polygons:
-                    valid_poly = False
-                    if isinstance(poly, (list, np.ndarray)):
-                        try:
-                            if len(poly) >= 6:
-                                flattened = np.asarray(poly, dtype=np.float32).reshape(-1)
-                                if flattened.size >= 6 and np.all(np.isfinite(flattened)):
-                                    polygon_segments.append(flattened.tolist())
-                                    valid_poly = True
-                        except (TypeError, ValueError) as exc:
-                            logger.warning(
-                                "Failed to normalize polygon segmentation due to %s; skipping.",
-                                exc,
-                            )
-                    if not valid_poly:
-                        logger.warning(
-                            "Skipping invalid polygon segmentation for annotation %s in %s.",
-                            ann.get("id", "<unknown>"),
-                            dataset_dict.get("file_name", "<unknown>"),
-                        )
-                continue
-
-            if isinstance(seg, dict) and seg.get("counts") and mask_height and mask_width:
-                try:
-                    decoded = coco_mask.decode(seg)
-                except Exception:  # pragma: no cover - best-effort decode
-                    decoded = None
-                if decoded is not None:
-                    decoded = np.asarray(decoded, dtype=np.uint8)
-                    if decoded.ndim == 3:
-                        decoded = decoded[..., 0]
-                    if decoded.shape != (mask_height, mask_width):
-                        decoded = np.zeros((mask_height, mask_width), dtype=np.uint8)
-                    raster_masks.append(decoded)
-                continue
-
-            if ("bbox" in ann) and mask_height and mask_width:
-                bbox = ann["bbox"]
-                bbox_mode = ann.get("bbox_mode", BoxMode.XYXY_ABS)
-                x0, y0, x1, y1 = BoxMode.convert(bbox, bbox_mode, BoxMode.XYXY_ABS)
-                x0 = max(0, min(int(np.floor(x0)), mask_width))
-                y0 = max(0, min(int(np.floor(y0)), mask_height))
-                x1 = max(x0, min(int(np.ceil(x1)), mask_width))
-                y1 = max(y0, min(int(np.ceil(y1)), mask_height))
-                if x1 > x0 and y1 > y0:
-                    m = np.zeros((mask_height, mask_width), dtype=np.uint8)
-                    m[y0:y1, x0:x1] = 1
-                    raster_masks.append(m)
-
-        merged_mask = np.zeros((mask_height, mask_width), dtype=np.uint8)
-
-        if polygon_segments and mask_height and mask_width:
-            try:
-                rles = coco_mask.frPyObjects(polygon_segments, mask_height, mask_width)
-                rle = coco_mask.merge(rles)
-                decoded = coco_mask.decode(rle)
-                if decoded.ndim == 3:
-                    decoded = decoded[..., 0]
-                merged_mask = np.maximum(merged_mask, decoded.astype("uint8"))
-            except Exception:  # pragma: no cover - best-effort decoding
-                pass
-
-        if raster_masks:
-            try:
-                raster_merged = np.clip(np.sum(raster_masks, axis=0), 0, 1).astype("uint8")
-                merged_mask = np.maximum(merged_mask, raster_merged)
-            except Exception:  # pragma: no cover - sum fallback
-                pass
-
-        merged_mask = np.asarray(merged_mask, dtype=np.uint8)
-        if merged_mask.ndim == 3:
-            merged_mask = merged_mask.reshape(merged_mask.shape[-2], merged_mask.shape[-1])
-        if merged_mask.shape != (mask_height, mask_width):
-            merged_mask = np.zeros((mask_height, mask_width), dtype=np.uint8)
-
-        if self.is_train:
-            dataset_dict["gt_mask_merged"] = torch.from_numpy(merged_mask.copy()).unsqueeze(0)
-        else:
-            dataset_dict["gt_mask_merged"] = merged_mask
-
 
         # Language data
         dataset_name = dataset_dict.get("dataset_name", "") or ""
@@ -382,3 +390,16 @@ class RefCOCOMapper:
         dataset_dict["sentence"] = sent
 
         return dataset_dict
+    @staticmethod
+    def _resize_mask(mask, height, width):
+        if mask is None:
+            return None
+        if mask.shape == (height, width):
+            return mask
+        if cv2 is not None:
+            return cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
+
+        tensor = torch.from_numpy(mask.astype(np.float32, copy=False)).unsqueeze(0).unsqueeze(0)
+        resized = F.interpolate(tensor, size=(height, width), mode="nearest")
+        return resized.squeeze(0).squeeze(0).to(dtype=torch.uint8).cpu().numpy()
+
