@@ -2,28 +2,60 @@
 
 import argparse
 import importlib.util
+import itertools
 from collections import Counter
-from typing import List
+from typing import Iterable, List
 
+import numpy as np
 import torch
+
+
+def _as_numpy_mask(mask, height: int, width: int) -> np.ndarray:
+    """Return a numpy uint8 mask with shape ``(height, width)``."""
+
+    if mask is None:
+        return np.zeros((height, width), dtype=np.uint8)
+
+    if isinstance(mask, np.ndarray):
+        mask_np = mask.astype(np.uint8, copy=False)
+    elif torch.is_tensor(mask):
+        mask_cpu = mask.detach().cpu()
+        if mask_cpu.dtype != torch.uint8:
+            mask_cpu = mask_cpu.to(dtype=torch.uint8)
+        mask_np = mask_cpu.numpy()
+    else:
+        mask_np = np.asarray(mask, dtype=np.uint8)
+
+    if mask_np.ndim == 3:
+        mask_np = mask_np.reshape(mask_np.shape[-2], mask_np.shape[-1])
+
+    if mask_np.shape != (height, width):
+        corrected = np.zeros((height, width), dtype=np.uint8)
+        h = min(height, mask_np.shape[0])
+        w = min(width, mask_np.shape[1])
+        corrected[:h, :w] = mask_np[:h, :w]
+        mask_np = corrected
+
+    return mask_np
 
 
 def _build_dummy_outputs(inputs: List[dict]):
     outputs = []
     for sample in inputs:
         merged_mask = sample.get("gt_mask_merged")
-        if merged_mask is None:
-            image_tensor = sample.get("image")
-            if image_tensor is not None:
-                height, width = image_tensor.shape[1:]
-            else:
-                height = width = 1
-            merged_mask = torch.zeros((1, height, width), dtype=torch.float32)
-        merged_mask = merged_mask.to(dtype=torch.float32)
-        spatial_size = merged_mask.shape[-2:]
+        image_tensor = sample.get("image")
+        if image_tensor is not None:
+            height, width = image_tensor.shape[1:]
+        else:
+            height = width = 1
+
+        mask_np = _as_numpy_mask(merged_mask, height, width)
+        mask_tensor = torch.from_numpy(mask_np.astype(np.float32, copy=False)).unsqueeze(0)
+
+        spatial_size = mask_tensor.shape[-2:]
 
         ref_seg = torch.zeros((2,) + spatial_size, dtype=torch.float32)
-        ref_seg[1] = merged_mask.squeeze(0)
+        ref_seg[1] = mask_tensor.squeeze(0)
 
         nt_label = torch.tensor([0.0, 1.0], dtype=torch.float32)
 
@@ -37,7 +69,7 @@ def main():
         return
 
     from detectron2.config import get_cfg
-    from detectron2.data import build_detection_test_loader
+    from detectron2.data import DatasetCatalog, build_detection_test_loader
 
     from gres_model.config import add_gres_config
     from gres_model.evaluation.refer_evaluation import ReferEvaluator
@@ -67,16 +99,45 @@ def main():
     cfg.freeze()
 
     dataset_name = cfg.DATASETS.TEST[0]
+    dataset = DatasetCatalog.get(dataset_name)
+    dataset_key = dataset_name.split("_")[0] if "_" in dataset_name else dataset_name
+    dataset_split = dataset_name.split("_")[-1] if "_" in dataset_name else "val"
+    print(f"[{dataset_key}] Built {len(dataset)} samples for split '{dataset_split}'")
+
     data_loader = build_detection_test_loader(cfg, dataset_name)
     evaluator = ReferEvaluator(dataset_name=dataset_name, distributed=False)
 
     evaluator.reset()
-    for idx, inputs in enumerate(data_loader):
+    data_iter: Iterable[List[dict]] = iter(data_loader)
+    try:
+        first_inputs = next(data_iter)
+    except StopIteration:
+        print(f"Dataset '{dataset_name}' produced no samples. Nothing to evaluate.")
+        return
+
+    if not first_inputs:
+        print(f"Dataset '{dataset_name}' yielded an empty batch.")
+        return
+
+    first_sample = first_inputs[0]
+    image_tensor = first_sample.get("image")
+    if image_tensor is not None:
+        height, width = image_tensor.shape[1:]
+    else:
+        height = width = 1
+    first_mask_np = _as_numpy_mask(first_sample.get("gt_mask_merged"), height, width)
+    print(f"✅ gt_mask_merged: {type(first_sample.get('gt_mask_merged'))}")
+    print(f"✅ mask shape: {first_mask_np.shape}")
+    print(f"✅ mask sum: {int(first_mask_np.sum())}")
+
+    batches_processed = 0
+    for idx, inputs in enumerate(itertools.chain([first_inputs], data_iter)):
         outputs = _build_dummy_outputs(inputs)
         evaluator.process(inputs, outputs)
         sources = [sample.get("source", "<none>") for sample in inputs]
         print(f"Batch {idx + 1}: source distribution {dict(Counter(sources))}")
-        if idx + 1 >= args.max_iters:
+        batches_processed += 1
+        if batches_processed >= args.max_iters:
             break
 
     results = evaluator.evaluate() or {}
