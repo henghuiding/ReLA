@@ -13,6 +13,8 @@ from detectron2.structures import BoxMode
 from transformers import BertTokenizer
 from pycocotools import mask as coco_mask
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["RefCOCOMapper"]
 
 
@@ -213,8 +215,30 @@ class RefCOCOMapper:
 
             if polygons:
                 for poly in polygons:
-                    if poly:
-                        polygon_segments.append(poly)
+                    valid_poly = False
+                    if isinstance(poly, (list, np.ndarray)):
+                        try:
+                            if len(poly) >= 6:
+                                try:
+                                    flattened = np.asarray(poly, dtype=np.float32).reshape(-1)
+                                except (TypeError, ValueError) as exc:
+                                    logger.warning(
+                                        "Failed to normalize polygon segmentation due to %s; skipping.",
+                                        exc,
+                                    )
+                                else:
+                                    if flattened.size >= 6 and np.all(np.isfinite(flattened)):
+                                        polygon_segments.append(flattened.tolist())
+                                        valid_poly = True
+                        except TypeError:
+                            # Objects without a length fall through to warning below.
+                            pass
+                    if not valid_poly:
+                        logger.warning(
+                            "Skipping invalid polygon segmentation for annotation %s in %s.",
+                            ann.get("id", "<unknown>"),
+                            dataset_dict.get("file_name", "<unknown>"),
+                        )
                 continue
 
             if ("bbox" in ann) and height_i and width_i:
