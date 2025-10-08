@@ -199,8 +199,17 @@ class RefCOCOMapper:
         # gracefully falls back to bbox rectangles for datasets like Miami2025.
         anns = dataset_dict.get("annotations", [])
 
-        height_i = int(height) if height else 0
-        width_i = int(width) if width else 0
+        def _safe_hw(h_default, w_default):
+            """Return positive integer height/width for mask rasterization."""
+            h = int(h_default) if h_default and int(h_default) > 0 else 0
+            w = int(w_default) if w_default and int(w_default) > 0 else 0
+            if h <= 0:
+                h = int(image_shape[0]) if image_shape and image_shape[0] > 0 else 1
+            if w <= 0:
+                w = int(image_shape[1]) if image_shape and image_shape[1] > 0 else 1
+            return h, w
+
+        height_i, width_i = _safe_hw(height, width)
 
         polygon_segments = []
         raster_masks = []
@@ -254,8 +263,7 @@ class RefCOCOMapper:
                     m[y0:y1, x0:x1] = 1
                     raster_masks.append(m)
 
-        mask_height = height_i if height_i > 0 else 1
-        mask_width = width_i if width_i > 0 else 1
+        mask_height, mask_width = height_i, width_i
         merged_mask = np.zeros((mask_height, mask_width), dtype=np.uint8)
 
         if polygon_segments and height_i and width_i:
@@ -276,7 +284,20 @@ class RefCOCOMapper:
             except Exception:  # pragma: no cover - sum fallback
                 pass
 
-        dataset_dict["gt_mask_merged"] = merged_mask
+        expected_shape = (mask_height, mask_width)
+        if merged_mask is None:
+            merged_mask = np.zeros(expected_shape, dtype=np.uint8)
+        else:
+            merged_mask = np.asarray(merged_mask, dtype=np.uint8)
+            if merged_mask.ndim == 3:
+                merged_mask = merged_mask.reshape(merged_mask.shape[-2], merged_mask.shape[-1])
+            if merged_mask.shape != expected_shape:
+                merged_mask = np.zeros(expected_shape, dtype=np.uint8)
+
+        if self.is_train:
+            dataset_dict["gt_mask_merged"] = torch.as_tensor(merged_mask.copy()).unsqueeze(0)
+        else:
+            dataset_dict["gt_mask_merged"] = merged_mask
 
 
         # Language data
