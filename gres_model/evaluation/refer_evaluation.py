@@ -5,10 +5,17 @@ import numpy as np
 import os
 from collections import OrderedDict, defaultdict
 import torch
+import torch.nn.functional as F
+
+try:
+    import cv2  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    cv2 = None
 
 from detectron2.utils.comm import all_gather, is_main_process, synchronize
 from detectron2.utils.file_io import PathManager
 from detectron2.evaluation.evaluator import DatasetEvaluator
+from detectron2.structures import BoxMode
 
 
 def computeIoU(pred_seg, gd_seg):
@@ -16,6 +23,60 @@ def computeIoU(pred_seg, gd_seg):
     U = np.sum(np.logical_or(pred_seg, gd_seg))
 
     return I, U
+
+
+def _to_uint8_mask(mask):
+    if mask is None:
+        return None
+    if torch.is_tensor(mask):
+        mask_np = mask.detach().cpu().numpy()
+    else:
+        mask_np = np.asarray(mask)
+
+    if mask_np.size == 0:
+        return None
+
+    mask_np = mask_np.astype(np.uint8, copy=False)
+    if mask_np.ndim >= 3:
+        mask_np = mask_np.reshape(mask_np.shape[-2], mask_np.shape[-1])
+    return mask_np
+
+
+def _resize_mask(mask, height, width):
+    if mask is None:
+        return None
+    if mask.shape == (height, width):
+        return mask
+    if cv2 is not None:
+        return cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
+
+    tensor = torch.from_numpy(mask.astype(np.float32, copy=False)).unsqueeze(0).unsqueeze(0)
+    resized = F.interpolate(tensor, size=(height, width), mode="nearest")
+    return resized.squeeze(0).squeeze(0).to(dtype=torch.uint8).cpu().numpy()
+
+
+def _mask_from_boxes(annotations, height, width):
+    if not annotations:
+        return None
+    bbox_mask = np.zeros((height, width), dtype=np.uint8)
+    has_box = False
+    for ann in annotations:
+        bbox = ann.get("bbox")
+        if bbox is None:
+            continue
+        bbox_mode = ann.get("bbox_mode", BoxMode.XYXY_ABS)
+        x0, y0, x1, y1 = BoxMode.convert(bbox, bbox_mode, BoxMode.XYXY_ABS)
+        x0 = max(0, min(int(np.floor(x0)), width))
+        y0 = max(0, min(int(np.floor(y0)), height))
+        x1 = max(x0, min(int(np.ceil(x1)), width))
+        y1 = max(y0, min(int(np.ceil(y1)), height))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        bbox_mask[y0:y1, x0:x1] = 1
+        has_box = True
+    if not has_box:
+        return None
+    return bbox_mask
 
 class ReferEvaluator(DatasetEvaluator):
     def __init__(
@@ -72,27 +133,77 @@ class ReferEvaluator(DatasetEvaluator):
                 )
 
             # output mask
-            output_mask = output["ref_seg"].argmax(dim=0).to(self._cpu_device)
-            pred_mask = np.array(output_mask, dtype=np.int8)
+            output_mask = output["ref_seg"].argmax(dim=0)
+            output_mask_cpu = output_mask.to(self._cpu_device)
+
+            def _safe_dim(value, fallback):
+                try:
+                    dim = int(value)
+                except (TypeError, ValueError):
+                    dim = 0
+                return dim if dim > 0 else fallback
+
+            mask_height = output_mask_cpu.shape[0] if output_mask_cpu.ndim >= 1 else 1
+            mask_width = output_mask_cpu.shape[1] if output_mask_cpu.ndim >= 2 else mask_height
+
+            height = _safe_dim(input.get("height"), mask_height)
+            width = _safe_dim(input.get("width"), mask_width)
+
+            pred_mask = _to_uint8_mask(output_mask_cpu)
+            annotations = input.get("annotations")
             gt_mask_data = input.get('gt_mask_merged')
-            if isinstance(gt_mask_data, torch.Tensor):
-                gt_mask_data = gt_mask_data.to(self._cpu_device).numpy()
-            elif isinstance(gt_mask_data, np.ndarray):
-                pass
-            elif gt_mask_data is None:
-                if not self._warned_missing_gt_mask:
-                    self._logger.warning(
-                        "[ReferEvaluator] Missing 'gt_mask_merged'; using zeros"
-                    )
-                    self._warned_missing_gt_mask = True
-                height = input.get('height') or pred_mask.shape[0]
-                width = input.get('width') or (
-                    pred_mask.shape[1] if pred_mask.ndim > 1 else pred_mask.shape[0]
-                )
-                gt_mask_data = np.zeros((height, width), dtype=np.uint8)
+            gt_mask_source = "gt_mask_merged"
+            gt_mask = _to_uint8_mask(gt_mask_data)
+
+            if gt_mask is None:
+                gt_mask = _mask_from_boxes(annotations, height, width)
+                gt_mask_source = "bbox_fallback"
+                if gt_mask is None:
+                    if not self._warned_missing_gt_mask:
+                        self._logger.warning(
+                            "[ReferEvaluator] Missing 'gt_mask_merged' and bbox fallback for img_id %s",
+                            img_id,
+                        )
+                        self._warned_missing_gt_mask = True
+                    gt_mask = np.zeros((height, width), dtype=np.uint8)
+                    gt_mask_source = "missing"
+
+            gt_mask = _resize_mask(gt_mask, height, width)
+            if gt_mask is None:
+                gt_mask = np.zeros((height, width), dtype=np.uint8)
+
+            if pred_mask is None:
+                pred_mask = np.zeros((height, width), dtype=np.uint8)
             else:
-                gt_mask_data = np.array(gt_mask_data, dtype=np.uint8)
-            gt = np.array(gt_mask_data, dtype=np.int8)
+                pred_mask = _resize_mask(pred_mask, gt_mask.shape[0], gt_mask.shape[1])
+
+            pred_mask = (pred_mask > 0).astype(np.uint8)
+            gt_mask = (gt_mask > 0).astype(np.uint8)
+
+            gt_nt_flag = bool(input.get('empty', False))
+            mask_valid = True
+            skip_reason = None
+            if not gt_nt_flag and gt_mask.sum() == 0:
+                mask_valid = False
+                skip_reason = 'empty_gt_mask'
+                self._logger.warning(
+                    "[ReferEvaluator] Empty GT mask for targeted sample img_id=%s; skipping IoU.",
+                    img_id,
+                )
+
+            if gt_mask_source == "bbox_fallback" and gt_mask.sum() == 0:
+                self._logger.warning(
+                    "[ReferEvaluator] Bbox fallback produced empty mask for img_id=%s.",
+                    img_id,
+                )
+
+            self._logger.debug(
+                "[ReferEvaluator] Mask alignment img_id=%s pred_shape=%s gt_shape=%s source=%s",
+                img_id,
+                pred_mask.shape,
+                gt_mask.shape,
+                gt_mask_source,
+            )
 
             # output NT label
             output_nt = output["nt_label"].argmax(dim=0).bool().to(self._cpu_device)
@@ -121,9 +232,17 @@ class ReferEvaluator(DatasetEvaluator):
                 'sent': sent_text,
                 'sent_info': sent_info_payload,
                 'pred_nt': pred_nt,
-                'gt_nt': input.get('empty', False),
+                'gt_nt': gt_nt_flag,
                 'pred_mask': pred_mask,
-                'gt_mask': gt
+                'gt_mask': gt_mask,
+                'mask_valid': mask_valid,
+                'skip_reason': skip_reason,
+                'gt_mask_source': gt_mask_source,
+                'pred_shape': tuple(pred_mask.shape),
+                'gt_shape': tuple(gt_mask.shape),
+                'gt_mask_sum': int(gt_mask.sum()),
+                'height': height,
+                'width': width
                 })
 
     def evaluate(self):
@@ -183,6 +302,25 @@ class ReferEvaluator(DatasetEvaluator):
             ref_result['pred_nt'] = eval_sample['pred_nt']
             ref_result['sent'] = eval_sample['sent']
             ref_result['sent_info'] = eval_sample['sent_info']
+            ref_result['gt_mask_source'] = eval_sample.get('gt_mask_source')
+            ref_result['pred_shape'] = eval_sample.get('pred_shape')
+            ref_result['gt_shape'] = eval_sample.get('gt_shape')
+            ref_result['gt_mask_sum'] = eval_sample.get('gt_mask_sum')
+
+            if not eval_sample.get('mask_valid', True):
+                skip_reason = eval_sample.get('skip_reason') or 'invalid_mask'
+                self._logger.warning(
+                    "[ReferEvaluator] Skipping IoU for img_id=%s (reason: %s).",
+                    eval_sample['img_id'],
+                    skip_reason,
+                )
+                ref_result['skip_iou'] = True
+                ref_result['skip_reason'] = skip_reason
+                results_dict.append(ref_result)
+                continue
+
+            ref_result['skip_iou'] = False
+            ref_result['skip_reason'] = eval_sample.get('skip_reason')
 
             I, U = computeIoU(eval_sample['pred_mask'], eval_sample['gt_mask'])
 
@@ -248,8 +386,10 @@ class ReferEvaluator(DatasetEvaluator):
         # results for each source
         for src in detected_srcs:
             res = {}
-            res['gIoU'] = 100. * (accum_IoU[src] / total_count[src])
-            res['cIoU'] = accum_I[src] * 100. / accum_U[src]
+            total = total_count[src]
+            res['gIoU'] = 100. * (accum_IoU[src] / total) if total > 0 else 0.0
+            union = accum_U[src]
+            res['cIoU'] = accum_I[src] * 100. / union if union > 0 else 0.0
 
             self._logger.info(str(nt[src]))
             if empty_count[src] > 0:
@@ -260,7 +400,8 @@ class ReferEvaluator(DatasetEvaluator):
 
             for thres in pr_thres:
                 pr_name = 'Pr@{0:1.1f}'.format(thres)
-                res[pr_name] = pr_count[src][thres] * 100. / not_empty_count[src]
+                denom = not_empty_count[src]
+                res[pr_name] = pr_count[src][thres] * 100. / denom if denom > 0 else 0.0
             
             final_results_list.append((src, res))
         
@@ -270,12 +411,15 @@ class ReferEvaluator(DatasetEvaluator):
         # global results
         if len(detected_srcs) > 1:
             res_full = {}
-            res_full['gIoU'] = 100. * _sum_values(accum_IoU) / _sum_values(total_count)
-            res_full['cIoU'] =  100. * _sum_values(accum_I) / _sum_values(accum_U)
+            total_sum = _sum_values(total_count)
+            res_full['gIoU'] = 100. * _sum_values(accum_IoU) / total_sum if total_sum > 0 else 0.0
+            union_sum = _sum_values(accum_U)
+            res_full['cIoU'] =  100. * _sum_values(accum_I) / union_sum if union_sum > 0 else 0.0
 
             for thres in pr_thres:
                 pr_name = 'Pr@{0:1.1f}'.format(thres)
-                res_full[pr_name] = sum([pr_count[src][thres] for src in detected_srcs]) * 100. / _sum_values(not_empty_count)
+                denom = _sum_values(not_empty_count)
+                res_full[pr_name] = sum([pr_count[src][thres] for src in detected_srcs]) * 100. / denom if denom > 0 else 0.0
 
             final_results_list.append(('full', res_full))
         

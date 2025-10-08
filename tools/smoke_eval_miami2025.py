@@ -8,6 +8,12 @@ from typing import Iterable, List
 
 import numpy as np
 import torch
+import torch.nn.functional as F
+
+try:
+    import cv2  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    cv2 = None
 
 
 def _as_numpy_mask(mask, height: int, width: int) -> np.ndarray:
@@ -61,6 +67,22 @@ def _build_dummy_outputs(inputs: List[dict]):
 
         outputs.append({"ref_seg": ref_seg, "nt_label": nt_label})
     return outputs
+
+
+def _compute_iou(pred_mask: np.ndarray, gt_mask: np.ndarray):
+    intersection = int(np.logical_and(pred_mask, gt_mask).sum())
+    union = int(np.logical_or(pred_mask, gt_mask).sum())
+    return intersection, union
+
+
+def _resize_to_shape(mask: np.ndarray, height: int, width: int) -> np.ndarray:
+    if mask.shape == (height, width):
+        return mask
+    if cv2 is not None:
+        return cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
+    tensor = torch.from_numpy(mask.astype(np.float32, copy=False)).unsqueeze(0).unsqueeze(0)
+    resized = F.interpolate(tensor, size=(height, width), mode="nearest")
+    return resized.squeeze(0).squeeze(0).to(dtype=torch.uint8).cpu().numpy()
 
 
 def main():
@@ -134,6 +156,32 @@ def main():
     for idx, inputs in enumerate(itertools.chain([first_inputs], data_iter)):
         outputs = _build_dummy_outputs(inputs)
         evaluator.process(inputs, outputs)
+
+        for sample, output in zip(inputs, outputs):
+            image_tensor = sample.get("image")
+            sample_height = sample.get("height")
+            sample_width = sample.get("width")
+            if image_tensor is not None:
+                h_default, w_default = image_tensor.shape[1:3]
+            else:
+                h_default = w_default = 1
+            height = int(sample_height) if isinstance(sample_height, (int, float)) and int(sample_height) > 0 else h_default
+            width = int(sample_width) if isinstance(sample_width, (int, float)) and int(sample_width) > 0 else w_default
+
+            gt_mask_np = _as_numpy_mask(sample.get("gt_mask_merged"), height, width)
+            pred_mask_np = output["ref_seg"].argmax(dim=0).detach().cpu().numpy().astype(np.uint8)
+            if pred_mask_np.shape != gt_mask_np.shape:
+                pred_mask_np = _resize_to_shape(pred_mask_np, gt_mask_np.shape[0], gt_mask_np.shape[1])
+
+            intersection, union = _compute_iou(pred_mask_np, gt_mask_np)
+            if union > 0:
+                iou_score = intersection / union
+                iou_msg = f"IoU={iou_score:.3f} (I={intersection}, U={union})"
+            else:
+                iou_msg = f"IoU undefined (I={intersection}, U={union})"
+            img_identifier = sample.get("image_id", "<unknown>")
+            print(f"✅ img {img_identifier}: pred shape {pred_mask_np.shape}, gt shape {gt_mask_np.shape}, {iou_msg}")
+
         sources = [sample.get("source", "<none>") for sample in inputs]
         print(f"Batch {idx + 1}: source distribution {dict(Counter(sources))}")
         batches_processed += 1
