@@ -217,10 +217,11 @@ def _poly_to_mask_safe(
     if not polygons:
         return None, "poly_missing"
 
+    # --- 修复后的安全写法 ---
     if isinstance(original_size, (list, tuple)) and len(original_size) >= 2:
-    base_h, base_w = original_size[-2], original_size[-1]
-else:
-    base_h, base_w = height, width
+        base_h, base_w = original_size[-2], original_size[-1]
+    else:
+        base_h, base_w = height, width
 
     base_h = max(int(base_h), 1)
     base_w = max(int(base_w), 1)
