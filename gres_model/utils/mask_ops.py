@@ -218,6 +218,8 @@ def _poly_to_mask_safe(
         return None, "poly_missing"
 
     base_h, base_w = original_size if original_size else (height, width)
+    base_h = max(int(base_h), 1)
+    base_w = max(int(base_w), 1)
     mask, status = _safe_decode(_decode_polygons, polygons, base_h, base_w)
     if mask is None:
         return None, f"poly_{status or 'invalid'}"
@@ -232,14 +234,35 @@ def _rle_to_mask_safe(
     segmentation: SegmentationInput,
     height: int,
     width: int,
+    *,
+    original_size: Optional[Tuple[int, int]] = None,
 ) -> Tuple[Optional[MaskArray], str]:
     """Decode RLE segmentations safely and resize to ``(height, width)``."""
 
     if not segmentation:
         return None, "rle_missing"
 
+    base_h = base_w = None
+    if original_size:
+        base_h = max(int(original_size[0]), 1)
+        base_w = max(int(original_size[1]), 1)
+
+    seg_obj = segmentation
+    if isinstance(segmentation, dict):
+        seg_obj = dict(segmentation)
+        if base_h is not None and base_w is not None and not seg_obj.get("size"):
+            seg_obj["size"] = [base_h, base_w]
+    elif isinstance(segmentation, (list, tuple)) and segmentation and isinstance(segmentation[0], dict):
+        seg_list = []
+        for piece in segmentation:
+            piece_dict = dict(piece)
+            if base_h is not None and base_w is not None and not piece_dict.get("size"):
+                piece_dict["size"] = [base_h, base_w]
+            seg_list.append(piece_dict)
+        seg_obj = seg_list
+
     try:
-        decoded, status = _safe_decode(_decode_rle, segmentation)
+        decoded, status = _safe_decode(_decode_rle, seg_obj)
     except RuntimeError as exc:  # pragma: no cover - pycocotools missing
         LOGGER.error("[mask_ops] %s", exc)
         return None, "rle_unavailable"
