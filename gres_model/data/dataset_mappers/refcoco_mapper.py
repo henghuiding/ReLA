@@ -19,6 +19,13 @@ from detectron2.structures import BoxMode
 from transformers import BertTokenizer
 from pycocotools import mask as coco_mask
 
+from gres_model.utils.mask_ops import (
+    _poly_to_mask_safe,
+    _rle_to_mask_safe,
+    bbox_to_mask,
+    merge_instance_masks,
+)
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["RefCOCOMapper"]
@@ -163,68 +170,37 @@ class RefCOCOMapper:
     @staticmethod
     def _decode_annotation_mask(ann, height, width):
         seg = ann.get("segmentation")
-        polygons = None
-        if hasattr(seg, "polygons"):
-            polygons = seg.polygons
-        elif isinstance(seg, list) and seg:
-            polygons = seg
+        masks = []
+        statuses = []
 
-        if polygons:
-            try:
-                rles = coco_mask.frPyObjects(polygons, height, width)
-                decoded = coco_mask.decode(rles)
-                if decoded.ndim == 3:
-                    decoded = decoded.max(axis=2)
-                decoded = np.asarray(decoded, dtype=np.uint8)
-                decoded = RefCOCOMapper._resize_mask(decoded, height, width)
-                if decoded is None:
-                    return None
-                return (decoded > 0).astype(np.uint8)
-            except Exception as exc:  # pragma: no cover
-                logger.warning(
-                    "Failed to decode polygon segmentation for ann %s: %s",
-                    ann.get("id", "<unknown>"),
-                    exc,
-                )
+        if isinstance(seg, dict):
+            mask, status = _rle_to_mask_safe(seg, height, width)
+            if mask is not None:
+                masks.append(mask)
+            statuses.append(status)
+        elif isinstance(seg, (list, tuple)):
+            if not seg:
+                statuses.append("seg_missing")
+            elif all(isinstance(poly, (list, tuple)) for poly in seg):
+                mask, status = _poly_to_mask_safe(seg, height, width)
+                if mask is not None:
+                    masks.append(mask)
+                statuses.append(status)
+            else:
+                for piece in seg:
+                    if isinstance(piece, dict):
+                        piece_mask, piece_status = _rle_to_mask_safe(piece, height, width)
+                    elif isinstance(piece, (list, tuple)):
+                        piece_mask, piece_status = _poly_to_mask_safe([piece], height, width)
+                    else:
+                        piece_mask, piece_status = (None, "seg_unsupported")
+                    if piece_mask is not None:
+                        masks.append(piece_mask)
+                    statuses.append(piece_status)
+        else:
+            statuses.append("seg_missing")
 
-        if isinstance(seg, dict) and seg.get("counts"):
-            try:
-                decoded = coco_mask.decode(seg)
-            except Exception as exc:  # pragma: no cover
-                logger.warning(
-                    "Failed to decode RLE segmentation for ann %s: %s",
-                    ann.get("id", "<unknown>"),
-                    exc,
-                )
-                decoded = None
-            if decoded is not None:
-                if decoded.ndim == 3:
-                    decoded = decoded.max(axis=2)
-                decoded = np.asarray(decoded, dtype=np.uint8)
-                decoded = RefCOCOMapper._resize_mask(decoded, height, width)
-                if decoded is None:
-                    return None
-                return (decoded > 0).astype(np.uint8)
-
-        return None
-
-    @staticmethod
-    def _bbox_to_mask(ann, height, width):
-        if "bbox" not in ann:
-            return None
-
-        bbox_mode = ann.get("bbox_mode", BoxMode.XYXY_ABS)
-        x0, y0, x1, y1 = BoxMode.convert(ann["bbox"], bbox_mode, BoxMode.XYXY_ABS)
-        x0 = max(0, min(int(np.floor(x0)), width))
-        y0 = max(0, min(int(np.floor(y0)), height))
-        x1 = max(0, min(int(np.ceil(x1)), width))
-        y1 = max(0, min(int(np.ceil(y1)), height))
-        if x1 <= x0 or y1 <= y0:
-            return None
-
-        mask = np.zeros((height, width), dtype=np.uint8)
-        mask[y0:y1, x0:x1] = 1
-        return mask
+        return merge_instance_masks(masks, height, width, statuses=statuses)
 
     def _synthesize_mask(self, dataset_dict):
         fallback_shape = None
@@ -240,28 +216,130 @@ class RefCOCOMapper:
             fallback_shape,
         )
 
-        anns = dataset_dict.get("annotations", []) or []
+        annotations = dataset_dict.get("annotations", []) or []
 
         merged_mask = np.zeros((height, width), dtype=np.uint8)
-        any_positive = False
-        for ann in anns:
-            mask = self._decode_annotation_mask(ann, height, width)
-            if mask is None:
-                mask = self._bbox_to_mask(ann, height, width)
-            if mask is None:
-                continue
-            any_positive = any_positive or mask.sum() > 0
-            merged_mask = np.maximum(merged_mask, mask)
+        status_log = []
+        decode_counts = {"rle": 0, "poly": 0, "bbox": 0, "synthetic": 0}
+        fallback_used = False
 
-        if not any_positive and anns:
-            for ann in anns:
-                mask = self._bbox_to_mask(ann, height, width)
-                if mask is not None:
-                    merged_mask = np.maximum(merged_mask, mask)
+        grouped = {}
+        for idx, ann in enumerate(annotations):
+            group_key = ann.get("ann_id")
+            if group_key is None:
+                group_key = ann.get("id")
+            if group_key is None:
+                group_key = f"ann_{idx}"
+            grouped.setdefault(group_key, []).append(ann)
 
-        merged_mask = (merged_mask > 0).astype(np.uint8)
+        for group_key, group_anns in grouped.items():
+            group_masks = []
+            group_statuses = []
+            for ann in group_anns:
+                decoded_mask, decode_status = self._decode_annotation_mask(ann, height, width)
+                if decoded_mask is not None and decoded_mask.sum() > 0:
+                    group_masks.append(decoded_mask)
+                    group_statuses.append(decode_status)
+                else:
+                    bbox_mask, bbox_status = bbox_to_mask(
+                        ann.get("bbox"),
+                        height,
+                        width,
+                        bbox_mode=ann.get("bbox_mode", BoxMode.XYXY_ABS),
+                    )
+                    if bbox_mask is not None and bbox_mask.sum() > 0:
+                        fallback_used = True
+                        group_masks.append(bbox_mask)
+                    fallback_status = decode_status or "decode_fail"
+                    if bbox_status:
+                        fallback_status = "+".join(
+                            [s for s in [fallback_status, bbox_status] if s]
+                        )
+                    group_statuses.append(fallback_status)
+
+            group_mask, merged_status = merge_instance_masks(
+                group_masks, height, width, statuses=group_statuses
+            )
+
+            if (group_mask is None or group_mask.sum() == 0) and group_anns:
+                bbox_masks = []
+                bbox_statuses = []
+                for ann in group_anns:
+                    bbox_mask, bbox_status = bbox_to_mask(
+                        ann.get("bbox"),
+                        height,
+                        width,
+                        bbox_mode=ann.get("bbox_mode", BoxMode.XYXY_ABS),
+                    )
+                    if bbox_mask is not None and bbox_mask.sum() > 0:
+                        bbox_masks.append(bbox_mask)
+                    bbox_statuses.append(bbox_status)
+                fallback_mask, fallback_status = merge_instance_masks(
+                    bbox_masks, height, width, statuses=bbox_statuses
+                )
+                if fallback_mask is not None and fallback_mask.sum() > 0:
+                    group_mask = fallback_mask
+                    merged_status = (
+                        "+".join([merged_status, fallback_status])
+                        if merged_status
+                        else fallback_status
+                    )
+                    fallback_used = True
+
+            if group_mask is None or group_mask.sum() == 0:
+                synthetic_mask = np.zeros((height, width), dtype=np.uint8)
+                synthetic_mask[height // 2, width // 2] = 1
+                group_mask = synthetic_mask
+                merged_status = (
+                    f"{merged_status}+synthetic" if merged_status else "synthetic"
+                )
+                decode_counts["synthetic"] += 1
+                fallback_used = True
+
+            merged_mask = np.maximum(merged_mask, group_mask.astype(np.uint8))
+
+            status_log.append(
+                {
+                    "ann_id": group_key,
+                    "status": merged_status,
+                    "mask_sum": int(group_mask.sum()),
+                }
+            )
+
+            if merged_status:
+                if "rle" in merged_status:
+                    decode_counts["rle"] += 1
+                if "poly" in merged_status:
+                    decode_counts["poly"] += 1
+                if "bbox" in merged_status:
+                    decode_counts["bbox"] += 1
+
+        final_mask = (merged_mask > 0).astype(np.uint8)
+        if final_mask.sum() == 0 and annotations:
+            synthetic_mask = np.zeros((height, width), dtype=np.uint8)
+            synthetic_mask[height // 2, width // 2] = 1
+            final_mask = synthetic_mask
+            status_log.append(
+                {
+                    "ann_id": "synthetic_fallback",
+                    "status": "synthetic",
+                    "mask_sum": 1,
+                }
+            )
+            decode_counts["synthetic"] += 1
+            fallback_used = True
+
         dataset_dict["height"], dataset_dict["width"] = height, width
-        return merged_mask
+        dataset_dict["mask_status"] = {
+            "height": height,
+            "width": width,
+            "groups": status_log,
+            "decode_counts": decode_counts,
+            "fallback_used": fallback_used,
+            "num_groups": len(grouped),
+            "mask_sum": int(final_mask.sum()),
+        }
+        return final_mask
 
     def __call__(self, dataset_dict):
         dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
@@ -320,7 +398,9 @@ class RefCOCOMapper:
             instances.gt_masks = gt_masks
 
         merged_mask = self._synthesize_mask(dataset_dict)
+        merged_mask = np.ascontiguousarray(merged_mask.astype(np.uint8, copy=False))
         if self.is_train:
+            dataset_dict["gt_mask_merged_numpy"] = merged_mask
             dataset_dict["gt_mask_merged"] = torch.from_numpy(merged_mask.copy()).unsqueeze(0)
         else:
             dataset_dict["gt_mask_merged"] = merged_mask
