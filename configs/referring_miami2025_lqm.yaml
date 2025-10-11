@@ -6,6 +6,8 @@ MODEL:
 DATASETS:
   TRAIN: ("miami2025_train",)
   TEST: ("miami2025_val",)
+  TRAIN_MAPPER: "RefCOCOMapper"
+  TEST_MAPPER: "RefCOCOMapper"
 
 INPUT:
   FORMAT: "RGB"
