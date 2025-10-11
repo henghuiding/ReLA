@@ -153,6 +153,7 @@ class ReferEvaluator(DatasetEvaluator):
             annotations = input.get("annotations")
             gt_mask_data = input.get('gt_mask_merged')
             gt_mask_source = "gt_mask_merged"
+            mask_status = input.get("mask_status") or {}
             gt_mask = _to_uint8_mask(gt_mask_data)
 
             if gt_mask is None:
@@ -183,6 +184,12 @@ class ReferEvaluator(DatasetEvaluator):
             gt_nt_flag = bool(input.get('empty', False))
             mask_valid = True
             skip_reason = None
+            skip_iou = False
+
+            if gt_nt_flag:
+                skip_iou = True
+                skip_reason = 'no_target'
+
             if not gt_nt_flag and gt_mask.sum() == 0:
                 mask_valid = False
                 skip_reason = 'empty_gt_mask'
@@ -236,11 +243,13 @@ class ReferEvaluator(DatasetEvaluator):
                 'pred_mask': pred_mask,
                 'gt_mask': gt_mask,
                 'mask_valid': mask_valid,
+                'skip_iou': skip_iou,
                 'skip_reason': skip_reason,
                 'gt_mask_source': gt_mask_source,
                 'pred_shape': tuple(pred_mask.shape),
                 'gt_shape': tuple(gt_mask.shape),
                 'gt_mask_sum': int(gt_mask.sum()),
+                'mask_status': mask_status,
                 'height': height,
                 'width': width
                 })
@@ -285,6 +294,7 @@ class ReferEvaluator(DatasetEvaluator):
             nt[src] = {"TP": 0, "TN": 0, "FP": 0, "FN": 0}
 
         results_dict = []
+        decode_stats = defaultdict(int)
 
         for eval_sample in predictions:
             src = eval_sample['source']
@@ -306,6 +316,21 @@ class ReferEvaluator(DatasetEvaluator):
             ref_result['pred_shape'] = eval_sample.get('pred_shape')
             ref_result['gt_shape'] = eval_sample.get('gt_shape')
             ref_result['gt_mask_sum'] = eval_sample.get('gt_mask_sum')
+            ref_result['mask_status'] = eval_sample.get('mask_status')
+
+            mask_status = eval_sample.get('mask_status') or {}
+            for group in mask_status.get('groups', []):
+                status_str = str(group.get('status', '')).lower()
+                if 'rle' in status_str:
+                    decode_stats['rle'] += 1
+                if 'poly' in status_str:
+                    decode_stats['poly'] += 1
+                if 'bbox' in status_str:
+                    decode_stats['bbox'] += 1
+                if 'synthetic' in status_str:
+                    decode_stats['synthetic'] += 1
+            if mask_status.get('fallback_used'):
+                decode_stats['fallback_groups'] += 1
 
             if not eval_sample.get('mask_valid', True):
                 skip_reason = eval_sample.get('skip_reason') or 'invalid_mask'
@@ -319,10 +344,15 @@ class ReferEvaluator(DatasetEvaluator):
                 results_dict.append(ref_result)
                 continue
 
-            ref_result['skip_iou'] = False
+            skip_iou = bool(eval_sample.get('skip_iou', False))
+            ref_result['skip_iou'] = skip_iou
             ref_result['skip_reason'] = eval_sample.get('skip_reason')
 
-            I, U = computeIoU(eval_sample['pred_mask'], eval_sample['gt_mask'])
+            if skip_iou:
+                I = 0
+                U = 0
+            else:
+                I, U = computeIoU(eval_sample['pred_mask'], eval_sample['gt_mask'])
 
             # No-target Samples
             if eval_sample['gt_nt']:
@@ -351,30 +381,37 @@ class ReferEvaluator(DatasetEvaluator):
 
             # Targeted Samples
             else:
-                # False Positive
                 if eval_sample['pred_nt']:
                     nt[src]["FP"] += 1
                     I = 0
-
-                # True Negative
                 else:
                     nt[src]["TN"] += 1
 
-                this_iou = float(0) if U == 0 else float(I) / float(U)
+                if skip_iou:
+                    ref_result['I'] = int(0)
+                    ref_result['U'] = int(0)
+                    ref_result['cIoU'] = float(0)
+                else:
+                    this_iou = float(0) if U == 0 else float(I) / float(U)
 
-                accum_IoU[src] += this_iou
-                accum_I[src] += I
-                accum_U[src] += U
+                    accum_IoU[src] += this_iou
+                    accum_I[src] += I
+                    accum_U[src] += U
 
-                not_empty_count[src] += 1
+                    not_empty_count[src] += 1
 
-                for thres in pr_thres:
-                    if this_iou >= thres:
-                        pr_count[src][thres] += 1
+                    for thres in pr_thres:
+                        if this_iou >= thres:
+                            pr_count[src][thres] += 1
 
-                ref_result['I'] = int(I)
-                ref_result['U'] = int(U)
-                ref_result['cIoU'] = float(this_iou)
+                    ref_result['I'] = int(I)
+                    ref_result['U'] = int(U)
+                    ref_result['cIoU'] = float(this_iou)
+                if skip_iou:
+                    # ensure targeted samples without IoU do not pollute denominators
+                    ref_result['I'] = int(0)
+                    ref_result['U'] = int(0)
+                    ref_result['cIoU'] = float(0)
 
             total_count[src] += 1
             results_dict.append(ref_result)
@@ -431,6 +468,9 @@ class ReferEvaluator(DatasetEvaluator):
             file_path = os.path.join(self._output_dir, f"{self._dataset_name}_detailed_results.json")
             with PathManager.open(file_path, "w") as f:
                 f.write(json.dumps(results_dict, indent=4))
+
+        if decode_stats:
+            self._logger.info("[ReferEvaluator] Mask decode stats: %s", dict(decode_stats))
 
         results = OrderedDict(final_results_list)
         self._logger.info(results)
