@@ -128,6 +128,33 @@ class RefCOCOMapper:
         self.img_format = image_format
         self._warned_missing_inst_json = False
 
+        default_inst_path = "/autodl-tmp/rela_data/annotations/instances.json"
+        self.id_to_ann = {}
+        if os.path.exists(default_inst_path):
+            try:
+                with open(default_inst_path, "r", encoding="utf-8") as f:
+                    inst_data = json.load(f)
+                anns = inst_data.get("annotations", []) or []
+                self.id_to_ann = {
+                    int(ann["id"]): ann
+                    for ann in anns
+                    if isinstance(ann, dict) and "id" in ann
+                }
+                print(
+                    f"[RefCOCOMapper] Preloaded {len(self.id_to_ann)} instance annotations from {default_inst_path}"
+                )
+            except (OSError, ValueError, TypeError) as exc:
+                logger.warning(
+                    "[RefCOCOMapper] Failed to preload default instances json %s: %s",
+                    default_inst_path,
+                    exc,
+                )
+                self.id_to_ann = {}
+        else:
+            print(
+                f"[RefCOCOMapper] Warning: default instances file not found at {default_inst_path}"
+            )
+
     @classmethod
     def from_config(cls, cfg, is_train=True):
         # Build augmentation
@@ -357,23 +384,17 @@ class RefCOCOMapper:
 
         ann_ids = self._collect_ann_ids(dataset_dict, raw_annotations)
 
-                # --- 修复逻辑：确保总能加载 instances.json ---
         inst_json = self._resolve_inst_json(dataset_dict)
-
-        # 强制 fallback 路径（防止 inst_json=None）
-        if not inst_json or not os.path.exists(inst_json):
-            default_inst_path = "/autodl-tmp/rela_data/annotations/instances.json"
-            if os.path.exists(default_inst_path):
-                inst_json = default_inst_path
-                logger.info(f"[RefCOCOMapper] Using default instances file: {inst_json}")
-            else:
-                logger.warning("[RefCOCOMapper] No valid instances.json found; masks will use fallback mode.")
-                inst_json = None
-
+        if not inst_json and not self._warned_missing_inst_json:
+            logger.warning(
+                "[RefCOCOMapper] No instances json provided; relying on dataset annotations only."
+            )
+            self._warned_missing_inst_json = True
         inst_data = self._load_instance_data(inst_json) if inst_json else None
+
         ann_store = inst_data["annotations"] if inst_data else {}
         image_hw_store = inst_data["image_hw"] if inst_data else {}
-        
+
         status_log = []
         per_instance_masks = []
         per_instance_statuses = []
@@ -390,7 +411,10 @@ class RefCOCOMapper:
 
         if ann_ids:
             for ann_id in ann_ids:
-                ann_record = ann_store.get(int(ann_id)) if ann_store else None
+                ann_key = int(ann_id)
+                ann_record = ann_store.get(ann_key) if ann_store else None
+                if ann_record is None and self.id_to_ann:
+                    ann_record = self.id_to_ann.get(ann_key)
                 statuses = []
                 mask_np = None
                 mask_sum = 0
