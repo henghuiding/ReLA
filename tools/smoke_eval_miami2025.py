@@ -607,11 +607,15 @@ def main():
     )
     parser.add_argument(
         "--dataset-json",
+        type=str,
+        nargs="?",
         default="datasets/miami2025.json",
         help="Miami2025 referring expressions JSON (offline mode).",
     )
     parser.add_argument(
         "--instances-json",
+        type=str,
+        nargs="?",
         default="datasets/instances_sample.json",
         help="COCO instances JSON with segmentations (offline mode).",
     )

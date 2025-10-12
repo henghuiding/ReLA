@@ -100,6 +100,7 @@ def _infer_bbox_from_segmentation(obj):
 # This is specifically designed for the COCO dataset.
 class RefCOCOMapper:
     _INSTANCE_DATA_CACHE = {}
+    _banner_printed = False
 
     @configurable
     def __init__(
@@ -147,9 +148,11 @@ class RefCOCOMapper:
                     for ann in anns
                     if isinstance(ann, dict) and "id" in ann
                 }
-                print(
-                    f"[RefCOCOMapper] Preloaded {len(self.id_to_ann)} instance annotations from {default_inst_path}"
-                )
+                if not getattr(RefCOCOMapper, "_banner_printed", False):
+                    print(
+                        f"[RefCOCOMapper] Preloaded {len(self.id_to_ann)} instance annotations from {default_inst_path}"
+                    )
+                    RefCOCOMapper._banner_printed = True
             except (OSError, ValueError, TypeError) as exc:
                 logger.warning(
                     "[RefCOCOMapper] Failed to preload default instances json %s: %s",
