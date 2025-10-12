@@ -151,7 +151,18 @@ def add_refcoco_config(cfg):
     cfg.REFERRING.MAX_TOKENS = 20
 
 
+def add_rela_config(cfg):
+    """Register ReLA-specific dataset settings."""
+
+    if not hasattr(cfg, "DATASETS"):
+        cfg.DATASETS = CN()
+
+    cfg.DATASETS.TRAIN_MAPPER = "RefCOCOMapper"
+    cfg.DATASETS.TEST_MAPPER = "RefCOCOMapper"
+
+
 def add_gres_config(cfg):
     add_maskformer2_config(cfg)
     add_refcoco_config(cfg)
     add_lqm_config(cfg)
+    add_rela_config(cfg)

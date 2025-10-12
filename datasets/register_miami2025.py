@@ -221,12 +221,16 @@ def load_miami2025_json(
             continue
 
         cat_id = cat_ids[0] if cat_ids else 0
+        ann_id_list = [int(a) for a in ann_ids]
+
         ann = {
             "iscrowd": 0,
             "category_id": int(cat_id),
             "segmentation": seg_list,
             "bbox": bbox,
             "bbox_mode": BoxMode.XYXY_ABS,
+            "ann_id": ann_id_list,
+            "ann_ids": ann_id_list,
         }
 
         record = {
@@ -242,6 +246,10 @@ def load_miami2025_json(
             "annotations": [ann],
             "ref_id":  ref_id,
             "sentence": sent,
+            "ann_id": ann_id_list,
+            "ann_ids": ann_id_list,
+            "no_target": bool(item.get("no_target", False)),
+            "inst_json": inst_json,
         }
         record["source"] = "miami2025"
         if dataset_name:
