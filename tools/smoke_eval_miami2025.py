@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from collections import Counter
+from types import SimpleNamespace
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
@@ -30,6 +31,7 @@ try:
         bbox_to_mask,
         merge_instance_masks,
     )
+    from gres_model.data.dataset_mappers.refcoco_mapper import RefCOCOMapper
 except ModuleNotFoundError:
     mask_ops_path = os.path.join(REPO_ROOT, "gres_model", "utils", "mask_ops.py")
     spec = importlib.util.spec_from_file_location("mask_ops_fallback", mask_ops_path)
@@ -41,6 +43,64 @@ except ModuleNotFoundError:
     _rle_to_mask_safe = mask_ops._rle_to_mask_safe
     bbox_to_mask = mask_ops.bbox_to_mask
     merge_instance_masks = mask_ops.merge_instance_masks
+    RefCOCOMapper = None  # type: ignore[assignment]
+
+
+_MAPPER_CACHE: Optional["RefCOCOMapper"] = None
+
+
+def _ensure_mapper_preloaded() -> Optional["RefCOCOMapper"]:
+    global _MAPPER_CACHE
+    if _MAPPER_CACHE is not None:
+        return _MAPPER_CACHE
+
+    if "RefCOCOMapper" not in globals() or RefCOCOMapper is None:
+        default_inst_path = "/autodl-tmp/rela_data/annotations/instances.json"
+        if os.path.exists(default_inst_path):
+            try:
+                with open(default_inst_path, "r", encoding="utf-8") as f:
+                    inst_data = json.load(f)
+                anns = inst_data.get("annotations", []) or []
+                id_to_ann = {
+                    int(ann["id"]): ann
+                    for ann in anns
+                    if isinstance(ann, dict) and "id" in ann
+                }
+                print(
+                    f"[smoke_eval] Preloaded {len(id_to_ann)} instance annotations from {default_inst_path}"
+                )
+                _MAPPER_CACHE = SimpleNamespace(id_to_ann=id_to_ann)
+            except (OSError, ValueError, TypeError) as exc:
+                print(
+                    "[smoke_eval] WARNING: Failed to preload default instances json "
+                    f"{default_inst_path}: {exc}"
+                )
+                _MAPPER_CACHE = None
+        else:
+            print(
+                f"[smoke_eval] WARNING: default instances file not found at {default_inst_path}"
+            )
+            _MAPPER_CACHE = None
+        return _MAPPER_CACHE
+
+    try:
+        print("[smoke_eval] Initializing RefCOCOMapper to preload instance annotations...")
+        _MAPPER_CACHE = RefCOCOMapper(
+            is_train=False,
+            tfm_gens=[],
+            image_format="RGB",
+            bert_type="bert-base-uncased",
+            max_tokens=32,
+            merge=True,
+            preload_only=True,
+        )
+    except Exception as exc:  # pragma: no cover - diagnostic output only
+        print(
+            "[smoke_eval] WARNING: Failed to instantiate RefCOCOMapper for preload: "
+            f"{exc}"
+        )
+        _MAPPER_CACHE = None
+    return _MAPPER_CACHE
 
 
 def _as_numpy_mask(mask, height: int, width: int) -> np.ndarray:
@@ -274,6 +334,9 @@ def _merge_group_offline(
 
 
 def _run_offline(args: argparse.Namespace) -> None:
+    mapper = _ensure_mapper_preloaded()
+    mapper_cache = getattr(mapper, "id_to_ann", {}) if mapper is not None else {}
+
     with open(args.dataset_json, "r") as f:
         dataset = json.load(f)
     with open(args.instances_json, "r") as f:
@@ -311,6 +374,8 @@ def _run_offline(args: argparse.Namespace) -> None:
         missing_ann_ids: List[int] = []
         for idx, ann_id in enumerate(ann_ids):
             ann = ann_map.get(int(ann_id))
+            if not ann and mapper_cache:
+                ann = mapper_cache.get(int(ann_id))
             if not ann:
                 missing_ann_ids.append(int(ann_id))
                 continue

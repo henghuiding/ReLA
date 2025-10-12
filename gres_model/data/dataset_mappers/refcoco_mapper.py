@@ -105,25 +105,31 @@ class RefCOCOMapper:
         self,
         is_train=True,
         *,
-        tfm_gens,
-        image_format,
-        bert_type,
-        max_tokens,
-        merge=True
+        tfm_gens=None,
+        image_format="RGB",
+        bert_type="bert-base-uncased",
+        max_tokens=32,
+        merge=True,
+        preload_only=False,
     ):
         self.is_train = is_train
         self.merge = merge
-        self.tfm_gens = tfm_gens
-        logging.getLogger(__name__).info(
-            "Full TransformGens used: {}".format(str(self.tfm_gens))
-        )
+        self.preload_only = preload_only
+        self.tfm_gens = tfm_gens if tfm_gens is not None else []
+        if not self.preload_only:
+            logging.getLogger(__name__).info(
+                "Full TransformGens used: {}".format(str(self.tfm_gens))
+            )
 
         self.bert_type = bert_type
         self.max_tokens = max_tokens
-        logging.getLogger(__name__).info(
-            "Loading BERT tokenizer: {}...".format(self.bert_type)
-        )
-        self.tokenizer = BertTokenizer.from_pretrained(self.bert_type)
+        if not self.preload_only:
+            logging.getLogger(__name__).info(
+                "Loading BERT tokenizer: {}...".format(self.bert_type)
+            )
+            self.tokenizer = BertTokenizer.from_pretrained(self.bert_type)
+        else:
+            self.tokenizer = None
 
         self.img_format = image_format
         self._warned_missing_inst_json = False
@@ -169,6 +175,7 @@ class RefCOCOMapper:
             "image_format": cfg.INPUT.FORMAT,
             "bert_type": cfg.REFERRING.BERT_TYPE,
             "max_tokens": cfg.REFERRING.MAX_TOKENS,
+            "preload_only": False,
         }
         return ret
 
