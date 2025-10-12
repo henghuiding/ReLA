@@ -283,6 +283,8 @@ class RefCOCOMapper:
                 cid = int(cand)
             except (TypeError, ValueError):
                 continue
+            if cid < 0:
+                continue
             if cid not in seen:
                 seen.add(cid)
                 ann_ids.append(cid)
@@ -377,16 +379,52 @@ class RefCOCOMapper:
         return None
 
     def _synthesize_mask(self, dataset_dict):
-        fallback_shape = None
+        transformed_shape = None
         image = dataset_dict.get("image")
         if torch.is_tensor(image):
-            fallback_shape = (int(image.shape[-2]), int(image.shape[-1]))
+            transformed_shape = (int(image.shape[-2]), int(image.shape[-1]))
         elif isinstance(image, np.ndarray):
-            fallback_shape = image.shape[:2]
+            h, w = image.shape[:2]
+            transformed_shape = (int(h), int(w))
+
+        stored_height = dataset_dict.get("height")
+        stored_width = dataset_dict.get("width")
+
+        def _valid_hw(candidate):
+            if candidate is None:
+                return None
+            if isinstance(candidate, (list, tuple)) and len(candidate) >= 2:
+                cand_h, cand_w = candidate[0], candidate[1]
+            else:
+                return None
+            try:
+                cand_h = int(cand_h)
+                cand_w = int(cand_w)
+            except (TypeError, ValueError):
+                return None
+            if cand_h <= 0 or cand_w <= 0:
+                return None
+            return cand_h, cand_w
+
+        fallback_shape = None
+        for candidate in (
+            transformed_shape,
+            (stored_height, stored_width),
+            dataset_dict.get("_original_hw"),
+        ):
+            valid = _valid_hw(candidate)
+            if valid is not None:
+                fallback_shape = valid
+                break
+
+        if transformed_shape is not None:
+            height_hint, width_hint = transformed_shape
+        else:
+            height_hint, width_hint = stored_height, stored_width
 
         height, width = self._normalize_hw(
-            dataset_dict.get("height"),
-            dataset_dict.get("width"),
+            height_hint,
+            width_hint,
             fallback_shape,
         )
 
@@ -431,12 +469,14 @@ class RefCOCOMapper:
                 mask_np = None
                 mask_sum = 0
 
-                original_hw = None
+                original_hw = dataset_dict.get("_original_hw")
                 if ann_record is not None:
                     image_id = ann_record.get("image_id")
                     if image_id is not None:
                         try:
-                            original_hw = image_hw_store.get(int(image_id))
+                            mapped_hw = image_hw_store.get(int(image_id))
+                            if mapped_hw:
+                                original_hw = mapped_hw
                         except (TypeError, ValueError):
                             original_hw = None
 
@@ -474,7 +514,7 @@ class RefCOCOMapper:
                             raw_ann,
                             height,
                             width,
-                            original_hw=fallback_shape,
+                            original_hw=dataset_dict.get("_original_hw"),
                         )
                         if decode_status:
                             statuses.append(decode_status)
@@ -518,7 +558,7 @@ class RefCOCOMapper:
                     raw_ann,
                     height,
                     width,
-                    original_hw=fallback_shape,
+                    original_hw=dataset_dict.get("_original_hw"),
                 )
                 if decoded_mask is None or decoded_mask.sum() == 0:
                     continue
@@ -600,6 +640,7 @@ class RefCOCOMapper:
         dataset_dict["mask_status"] = {
             "height": height,
             "width": width,
+            "original_hw": dataset_dict.get("_original_hw"),
             "groups": status_log,
             "decode_counts": decode_counts,
             "fallback_used": fallback_used,
@@ -637,6 +678,15 @@ class RefCOCOMapper:
 
     def __call__(self, dataset_dict):
         dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
+        original_hw = None
+        try:
+            orig_h = int(dataset_dict.get("height"))
+            orig_w = int(dataset_dict.get("width"))
+            if orig_h > 0 and orig_w > 0:
+                original_hw = (orig_h, orig_w)
+        except (TypeError, ValueError):
+            original_hw = None
+        dataset_dict["_original_hw"] = original_hw
         raw_annos_input = dataset_dict.get("annotations", []) or []
         dataset_dict["_raw_annotations"] = copy.deepcopy(raw_annos_input)
         if "ann_ids" not in dataset_dict and "ann_id" in dataset_dict:
@@ -789,6 +839,7 @@ class RefCOCOMapper:
             sent = str(sent) if sent is not None else ""
         dataset_dict["sentence"] = sent
 
+        dataset_dict.pop("_original_hw", None)
         return dataset_dict
     @staticmethod
     def _resize_mask(mask, height, width):

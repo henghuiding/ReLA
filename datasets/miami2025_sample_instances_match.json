@@ -1,0 +1,38 @@
+[
+  {
+    "ann_id": [3007],
+    "category_id": [18],
+    "file_name": "COCO_train2014_000000098304.jpg",
+    "image_id": 98304,
+    "no_target": false,
+    "ref_id": 1,
+    "sentences": [
+      {"raw": "person near pole", "sent": "person near pole"}
+    ],
+    "split": "train"
+  },
+  {
+    "ann_id": [99893, 108703],
+    "category_id": [18, 1],
+    "file_name": "COCO_train2014_000000098304.jpg",
+    "image_id": 98304,
+    "no_target": false,
+    "ref_id": 2,
+    "sentences": [
+      {"raw": "multiple objects", "sent": "multiple objects"}
+    ],
+    "split": "train"
+  },
+  {
+    "ann_id": [-1],
+    "category_id": [],
+    "file_name": "COCO_train2014_000000098304.jpg",
+    "image_id": 98304,
+    "no_target": true,
+    "ref_id": 3,
+    "sentences": [
+      {"raw": "no target", "sent": "no target"}
+    ],
+    "split": "train"
+  }
+]
