@@ -189,27 +189,64 @@ class RefCOCOMapper:
 
     @staticmethod
     def _normalize_hw(height, width, fallback_shape):
-        def _safe_int(value, default=0):
+        """Safely resolve ``(height, width)`` ensuring a non-degenerate size."""
+
+        SAFE_DEFAULT_HW = (480, 640)
+
+        def _to_int(value):
             try:
-                value_i = int(value)
+                if isinstance(value, np.ndarray):  # pragma: no branch - cheap guard
+                    value = value.item()
+                return int(round(float(value)))
             except (TypeError, ValueError):
-                value_i = default
-            return value_i if value_i > 0 else default
+                return 0
 
-        h = _safe_int(height)
-        w = _safe_int(width)
+        def _parse_candidate(candidate):
+            if candidate is None:
+                return None
+            if isinstance(candidate, (list, tuple, np.ndarray)):
+                if len(candidate) < 2:
+                    return None
+                cand_h = _to_int(candidate[0])
+                cand_w = _to_int(candidate[1])
+            else:
+                return None
+            if cand_h <= 0 or cand_w <= 0:
+                return None
+            return cand_h, cand_w
 
-        fallback_h = 0
-        fallback_w = 0
+        candidates = []
+        if height is not None and width is not None:
+            candidates.append((_to_int(height), _to_int(width)))
         if fallback_shape is not None:
-            if len(fallback_shape) >= 1:
-                fallback_h = _safe_int(fallback_shape[0])
-            if len(fallback_shape) >= 2:
-                fallback_w = _safe_int(fallback_shape[1])
+            parsed = _parse_candidate(fallback_shape)
+            if parsed is not None:
+                candidates.append(parsed)
 
-        h = h or fallback_h or 1
-        w = w or fallback_w or 1
-        return h, w
+        for cand_h, cand_w in candidates:
+            if cand_h > 0 and cand_w > 0:
+                if cand_h == 1 and cand_w == 1:
+                    continue
+                return cand_h, cand_w
+
+        return SAFE_DEFAULT_HW
+
+    @staticmethod
+    def _status_to_mode(status):
+        tokens = str(status or "").lower().replace("(", "+").replace(")", "").split("+")
+        for token in tokens:
+            token = token.strip()
+            if not token:
+                continue
+            if "poly" in token:
+                return "POLY"
+            if "rle" in token:
+                return "RLE"
+            if "bbox" in token:
+                return "BBOX"
+            if "synthetic" in token:
+                return "SYNTHETIC"
+        return "UNKNOWN"
 
     @staticmethod
     def _decode_annotation_mask(ann, height, width, *, original_hw=None):
@@ -431,7 +468,16 @@ class RefCOCOMapper:
         raw_annotations = dataset_dict.get("_raw_annotations") or []
         transformed_annotations = dataset_dict.get("annotations", []) or []
 
-        ann_ids = self._collect_ann_ids(dataset_dict, raw_annotations)
+        ann_ids_raw = self._collect_ann_ids(dataset_dict, raw_annotations)
+        valid_ann_ids = []
+        for ann in ann_ids_raw:
+            try:
+                ann_int = int(ann)
+            except (TypeError, ValueError):
+                continue
+            if ann_int < 0:
+                continue
+            valid_ann_ids.append(ann_int)
 
         inst_json = self._resolve_inst_json(dataset_dict)
         if not inst_json and not self._warned_missing_inst_json:
@@ -459,8 +505,8 @@ class RefCOCOMapper:
                 }
             )
 
-        if ann_ids:
-            for ann_id in ann_ids:
+        if valid_ann_ids:
+            for ann_id in valid_ann_ids:
                 ann_key = int(ann_id)
                 ann_record = self.id_to_ann.get(ann_key) if self.id_to_ann else None
                 if ann_record is None and ann_store:
@@ -550,6 +596,15 @@ class RefCOCOMapper:
                 mask_np = np.ascontiguousarray((mask_np > 0).astype(np.uint8, copy=False))
                 per_instance_masks.append(mask_np)
                 per_instance_statuses.append(status_label)
+                decode_mode = self._status_to_mode(status_label)
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "[RefCOCOMapper] ann_id=%s decode mode=%s | mask.shape=%s | mask.sum=%d",
+                        ann_id,
+                        decode_mode,
+                        tuple(mask_np.shape),
+                        int(mask_np.sum()),
+                    )
                 _accumulate_status(int(ann_id), status_label, mask_np)
 
         if not per_instance_masks and raw_annotations:
@@ -566,6 +621,15 @@ class RefCOCOMapper:
                 per_instance_masks.append(mask_np)
                 status = decode_status or "raw"
                 per_instance_statuses.append(status)
+                decode_mode = self._status_to_mode(status)
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "[RefCOCOMapper] ann_id=%s decode mode=%s | mask.shape=%s | mask.sum=%d",
+                        f"raw_{idx}",
+                        decode_mode,
+                        tuple(mask_np.shape),
+                        int(mask_np.sum()),
+                    )
                 _accumulate_status(f"raw_{idx}", status, mask_np)
 
         final_mask, merged_status = merge_instance_masks(
@@ -673,6 +737,12 @@ class RefCOCOMapper:
             int(final_mask.sum()),
             fallback_used,
             source_desc,
+        )
+        logger.debug(
+            "[RefCOCOMapper] final mode=%s | mask.shape=%s | mask.sum=%d",
+            mode_label,
+            tuple(final_mask.shape),
+            int(final_mask.sum()),
         )
         return final_mask
 
