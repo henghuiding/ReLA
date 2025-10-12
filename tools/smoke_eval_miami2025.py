@@ -47,60 +47,83 @@ except ModuleNotFoundError:
 
 
 _MAPPER_CACHE: Optional["RefCOCOMapper"] = None
+_MAPPER_SOURCE: Optional[str] = None
+
+
+def _load_default_instances(default_inst_path: str) -> Optional[SimpleNamespace]:
+    if not os.path.exists(default_inst_path):
+        print(
+            f"[smoke_eval] WARNING: default instances file not found at {default_inst_path}"
+        )
+        return None
+
+    try:
+        with open(default_inst_path, "r", encoding="utf-8") as f:
+            inst_data = json.load(f)
+    except (OSError, ValueError, TypeError) as exc:
+        print(
+            "[smoke_eval] WARNING: Failed to preload default instances json "
+            f"{default_inst_path}: {exc}"
+        )
+        return None
+
+    anns = inst_data.get("annotations", []) or []
+    id_to_ann = {
+        int(ann["id"]): ann
+        for ann in anns
+        if isinstance(ann, dict) and "id" in ann
+    }
+    print(
+        f"[smoke_eval] Preloaded {len(id_to_ann)} instance annotations from {default_inst_path}"
+    )
+    return SimpleNamespace(id_to_ann=id_to_ann)
 
 
 def _ensure_mapper_preloaded() -> Optional["RefCOCOMapper"]:
-    global _MAPPER_CACHE
+    global _MAPPER_CACHE, _MAPPER_SOURCE
     if _MAPPER_CACHE is not None:
         return _MAPPER_CACHE
 
-    if "RefCOCOMapper" not in globals() or RefCOCOMapper is None:
-        default_inst_path = "/autodl-tmp/rela_data/annotations/instances.json"
-        if os.path.exists(default_inst_path):
-            try:
-                with open(default_inst_path, "r", encoding="utf-8") as f:
-                    inst_data = json.load(f)
-                anns = inst_data.get("annotations", []) or []
-                id_to_ann = {
-                    int(ann["id"]): ann
-                    for ann in anns
-                    if isinstance(ann, dict) and "id" in ann
-                }
-                print(
-                    f"[smoke_eval] Preloaded {len(id_to_ann)} instance annotations from {default_inst_path}"
-                )
-                _MAPPER_CACHE = SimpleNamespace(id_to_ann=id_to_ann)
-            except (OSError, ValueError, TypeError) as exc:
-                print(
-                    "[smoke_eval] WARNING: Failed to preload default instances json "
-                    f"{default_inst_path}: {exc}"
-                )
-                _MAPPER_CACHE = None
-        else:
+    mapper_cls = globals().get("RefCOCOMapper")
+    if mapper_cls is not None:
+        try:
             print(
-                f"[smoke_eval] WARNING: default instances file not found at {default_inst_path}"
+                "[smoke_eval] Initializing RefCOCOMapper to preload instance annotations..."
             )
-            _MAPPER_CACHE = None
-        return _MAPPER_CACHE
+            _MAPPER_CACHE = mapper_cls(
+                is_train=False,
+                tfm_gens=[],
+                image_format="RGB",
+                bert_type="bert-base-uncased",
+                max_tokens=32,
+                merge=True,
+                preload_only=True,
+            )
+            _MAPPER_SOURCE = "RefCOCOMapper"
+            return _MAPPER_CACHE
+        except Exception as exc:  # pragma: no cover - diagnostic output only
+            print(
+                "[smoke_eval] WARNING: Failed to instantiate RefCOCOMapper for preload: "
+                f"{exc}"
+            )
 
-    try:
-        print("[smoke_eval] Initializing RefCOCOMapper to preload instance annotations...")
-        _MAPPER_CACHE = RefCOCOMapper(
-            is_train=False,
-            tfm_gens=[],
-            image_format="RGB",
-            bert_type="bert-base-uncased",
-            max_tokens=32,
-            merge=True,
-            preload_only=True,
-        )
-    except Exception as exc:  # pragma: no cover - diagnostic output only
-        print(
-            "[smoke_eval] WARNING: Failed to instantiate RefCOCOMapper for preload: "
-            f"{exc}"
-        )
-        _MAPPER_CACHE = None
+    default_inst_path = "/autodl-tmp/rela_data/annotations/instances.json"
+    namespace_cache = _load_default_instances(default_inst_path)
+    if namespace_cache is not None:
+        _MAPPER_CACHE = namespace_cache
+        _MAPPER_SOURCE = default_inst_path
+    else:
+        _MAPPER_CACHE = SimpleNamespace(id_to_ann={})
+        _MAPPER_SOURCE = "missing"
     return _MAPPER_CACHE
+
+
+def _describe_mapper_source() -> str:
+    if _MAPPER_CACHE is None:
+        return "uninitialized"
+    if isinstance(_MAPPER_CACHE, SimpleNamespace):
+        return _MAPPER_SOURCE or "json-cache"
+    return _MAPPER_SOURCE or "RefCOCOMapper"
 
 
 def _as_numpy_mask(mask, height: int, width: int) -> np.ndarray:
@@ -336,10 +359,19 @@ def _merge_group_offline(
 def _run_offline(args: argparse.Namespace) -> None:
     mapper = _ensure_mapper_preloaded()
     mapper_cache = getattr(mapper, "id_to_ann", {}) if mapper is not None else {}
+    cache_source = _describe_mapper_source()
+    if mapper_cache:
+        print(
+            f"[Offline Test] Mapper cache primed with {len(mapper_cache)} annotations (source={cache_source})."
+        )
+    else:
+        print(
+            f"[Offline Test] Mapper cache empty (source={cache_source}). Falling back to instances JSON only."
+        )
 
-    with open(args.dataset_json, "r") as f:
+    with open(args.dataset_json, "r", encoding="utf-8") as f:
         dataset = json.load(f)
-    with open(args.instances_json, "r") as f:
+    with open(args.instances_json, "r", encoding="utf-8") as f:
         instances = json.load(f)
 
     ann_map: Dict[int, Dict] = {
@@ -352,6 +384,8 @@ def _run_offline(args: argparse.Namespace) -> None:
     max_samples = int(args.max_samples) if args.max_samples else None
     selected = 0
     targeted_checked = 0
+    synthetic_failures: List[int] = []
+    missing_accumulator: Dict[int, List[int]] = {}
 
     for sample in dataset:
         if args.split and sample.get("split") != args.split:
@@ -384,6 +418,7 @@ def _run_offline(args: argparse.Namespace) -> None:
 
         final_mask = np.zeros((height, width), dtype=np.uint8)
         readable_tokens: List[str] = []
+        used_synthetic = False
         for group_key, group_anns in grouped.items():
             group_mask, mode_label = _merge_group_offline(
                 group_anns,
@@ -399,6 +434,7 @@ def _run_offline(args: argparse.Namespace) -> None:
             synthetic[height // 2, width // 2] = 1
             final_mask = synthetic
             readable_tokens.append("SYNTHETIC (fallback)")
+            used_synthetic = True
             if missing_ann_ids:
                 print(
                     f"[Offline Test] Missing annotations for {missing_ann_ids} in sample {image_id}; using synthetic fallback."
@@ -409,7 +445,7 @@ def _run_offline(args: argparse.Namespace) -> None:
         readable_summary = " | ".join(readable_tokens) if readable_tokens else "UNKNOWN"
 
         print(
-            f"✅ sample {image_id} | mode: {readable_summary} | mask.shape {final_mask.shape} | sum = {mask_sum}"
+            f"✅ sample {image_id} | ann_ids {ann_ids} | mode: {readable_summary} | mask.shape {final_mask.shape} | sum = {mask_sum}"
         )
 
         if not sample.get("no_target", False):
@@ -417,11 +453,138 @@ def _run_offline(args: argparse.Namespace) -> None:
             assert mask_sum > 0, "Expected non-empty mask for targeted sample"
             targeted_checked += 1
 
+        if missing_ann_ids:
+            missing_accumulator[image_id] = missing_ann_ids
+        if used_synthetic and not sample.get("no_target", False):
+            synthetic_failures.append(image_id)
+
         selected += 1
 
-    print(
+    if synthetic_failures and not args.allow_synthetic:
+        print(
+            "[Offline Test] FAILURE: synthetic fallback used for samples "
+            f"{synthetic_failures}. Re-run with real instances.json or use --allow-synthetic to override."
+        )
+        raise SystemExit(2)
+
+    summary = (
         f"[Offline Test] All {targeted_checked} targeted samples passed (shape match & non-empty)"
     )
+    if synthetic_failures:
+        summary += f" | synthetic allowed for {len(synthetic_failures)} samples"
+    print(summary)
+
+    if missing_accumulator:
+        print(
+            "[Offline Test] Missing ann_id lookup summary: "
+            + "; ".join(
+                f"image {img}: {ids}" for img, ids in sorted(missing_accumulator.items())
+            )
+        )
+
+
+def _run_unit_check(args: argparse.Namespace) -> None:
+    mapper_cls = globals().get("RefCOCOMapper")
+    if mapper_cls is None:
+        print(
+            "[Unit Check] RefCOCOMapper is unavailable (Detectron2 not installed); skipping."
+        )
+        return
+
+    try:
+        from detectron2.structures import BoxMode
+    except ModuleNotFoundError:
+        print(
+            "[Unit Check] Detectron2 structures could not be imported; skipping."
+        )
+        return
+
+    import tempfile
+
+    try:
+        from PIL import Image
+    except ImportError:
+        Image = None  # type: ignore
+
+    height = 32
+    width = 32
+    polygon = [8, 8, 24, 8, 24, 24, 8, 24]
+
+    mapper = mapper_cls(
+        is_train=False,
+        tfm_gens=[],
+        image_format="RGB",
+        bert_type="bert-base-uncased",
+        max_tokens=8,
+        merge=True,
+        preload_only=True,
+    )
+    mapper.id_to_ann = {}
+    mapper.tokenizer = SimpleNamespace(
+        encode=lambda text, add_special_tokens=True: [101, 102]
+    )
+    mapper.preload_only = False
+
+    annotation = {
+        "id": 1,
+        "image_id": 1,
+        "segmentation": [polygon],
+        "bbox": [8, 8, 16, 16],
+        "bbox_mode": int(BoxMode.XYWH_ABS),
+        "category_id": 1,
+    }
+    mapper.id_to_ann[1] = annotation
+
+    dataset_dict = {
+        "file_name": "",
+        "image_id": 1,
+        "height": height,
+        "width": width,
+        "annotations": [annotation.copy()],
+        "ann_ids": [1],
+        "dataset_name": "miami2025_unit",
+        "sentence": "unit test object",
+        "sentences": [{"sent": "unit test object"}],
+        "no_target": False,
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        image_path = os.path.join(tmpdir, "unit.png")
+        if Image is not None:
+            img = Image.fromarray(np.zeros((height, width, 3), dtype=np.uint8))
+            img.save(image_path)
+        elif cv2 is not None:
+            cv2.imwrite(image_path, np.zeros((height, width, 3), dtype=np.uint8))
+        else:
+            print(
+                "[Unit Check] Unable to create image file (no PIL/cv2); skipping."
+            )
+            return
+        dataset_dict["file_name"] = image_path
+
+        result = mapper(dataset_dict)
+
+    mask = result.get("gt_mask_merged")
+    if not isinstance(mask, np.ndarray):
+        raise AssertionError("Mapper did not return a numpy mask for gt_mask_merged")
+
+    if mask.shape != (height, width):
+        raise AssertionError(f"Unexpected mask shape {mask.shape}")
+
+    if int(mask.sum()) <= 0:
+        raise AssertionError("Expected non-empty mask in unit check")
+
+    mode = result.get("mask_status", {}).get("mode", "UNKNOWN")
+    print(
+        f"[Unit Check] PASS | mode={mode} | mask.shape={mask.shape} | sum={int(mask.sum())}"
+    )
+
+
+# Trigger preload once when the module is imported to satisfy pipeline expectations.
+try:
+    _ensure_mapper_preloaded()
+except Exception as preload_exc:  # pragma: no cover - diagnostics only
+    print(f"[smoke_eval] WARNING: initial mapper preload attempt failed: {preload_exc}")
 
 
 def main():
@@ -463,7 +626,21 @@ def main():
         default=5,
         help="Number of samples to inspect in offline mode.",
     )
+    parser.add_argument(
+        "--allow-synthetic",
+        action="store_true",
+        help="Allow synthetic fallback masks to pass offline validation.",
+    )
+    parser.add_argument(
+        "--unit-check",
+        action="store_true",
+        help="Run a minimal pure-Python RefCOCOMapper validation and exit.",
+    )
     args = parser.parse_args()
+
+    if args.unit_check:
+        _run_unit_check(args)
+        return
 
     if args.offline:
         _run_offline(args)

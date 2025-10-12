@@ -3,6 +3,7 @@ import copy
 import json
 import logging
 import os
+from typing import List
 
 import numpy as np
 import torch
@@ -405,6 +406,7 @@ class RefCOCOMapper:
         status_log = []
         per_instance_masks = []
         per_instance_statuses = []
+        missing_ann_ids: List[int] = []
         fallback_used = False
 
         def _accumulate_status(ann_identifier, status, mask_np):
@@ -419,9 +421,9 @@ class RefCOCOMapper:
         if ann_ids:
             for ann_id in ann_ids:
                 ann_key = int(ann_id)
-                ann_record = ann_store.get(ann_key) if ann_store else None
-                if ann_record is None and self.id_to_ann:
-                    ann_record = self.id_to_ann.get(ann_key)
+                ann_record = self.id_to_ann.get(ann_key) if self.id_to_ann else None
+                if ann_record is None and ann_store:
+                    ann_record = ann_store.get(ann_key)
                 statuses = []
                 mask_np = None
                 mask_sum = 0
@@ -458,6 +460,9 @@ class RefCOCOMapper:
                         mask_np = bbox_mask
                         mask_sum = int(bbox_mask.sum())
                         fallback_used = True
+
+                if ann_record is None:
+                    missing_ann_ids.append(ann_key)
 
                 if mask_np is None:
                     raw_ann = self._find_raw_annotation(raw_annotations, ann_id)
@@ -561,6 +566,7 @@ class RefCOCOMapper:
             _accumulate_status("synthetic_fallback", "synthetic", final_mask)
 
         final_mask = np.ascontiguousarray((final_mask > 0).astype(np.uint8, copy=False))
+        dataset_dict["height"], dataset_dict["width"] = height, width
 
         decode_counts = {"rle": 0, "poly": 0, "bbox": 0, "synthetic": 0}
         for entry in status_log:
@@ -575,7 +581,19 @@ class RefCOCOMapper:
             if any("synthetic" in token for token in tokens):
                 decode_counts["synthetic"] += 1
 
-        dataset_dict["height"], dataset_dict["width"] = height, width
+        if decode_counts["synthetic"] and not (
+            decode_counts["rle"] or decode_counts["poly"] or decode_counts["bbox"]
+        ):
+            mode_label = "SYNTHETIC"
+        elif decode_counts["rle"] + decode_counts["poly"] > 1:
+            mode_label = "MERGED"
+        elif decode_counts["rle"] + decode_counts["poly"] == 1:
+            mode_label = "MASK"
+        elif decode_counts["bbox"] > 0:
+            mode_label = "BBOX"
+        else:
+            mode_label = "UNKNOWN"
+
         dataset_dict["mask_status"] = {
             "height": height,
             "width": width,
@@ -585,7 +603,33 @@ class RefCOCOMapper:
             "num_groups": len(per_instance_masks),
             "mask_sum": int(final_mask.sum()),
             "inst_json": inst_json,
+            "mode": mode_label,
+            "missing_ann_ids": missing_ann_ids,
+            "used_synthetic": decode_counts["synthetic"] > 0,
         }
+
+        image_id = dataset_dict.get("image_id", "unknown")
+        ann_summary = dataset_dict.get("ann_ids") or dataset_dict.get("ann_id") or []
+        if not isinstance(ann_summary, (list, tuple)):
+            ann_summary = [ann_summary]
+        normalized_ann_summary: List[int] = []
+        for value in ann_summary:
+            try:
+                normalized_ann_summary.append(int(value))
+            except (TypeError, ValueError):
+                continue
+
+        source_desc = inst_json or ("preloaded-cache" if self.id_to_ann else "annotations-only")
+        logger.info(
+            "[RefCOCOMapper] sample %s | ann_ids %s | mode: %s | mask.shape %s | sum=%d | fallback=%s | source=%s",
+            image_id,
+            normalized_ann_summary,
+            mode_label,
+            tuple(final_mask.shape),
+            int(final_mask.sum()),
+            fallback_used,
+            source_desc,
+        )
         return final_mask
 
     def __call__(self, dataset_dict):

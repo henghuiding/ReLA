@@ -41,7 +41,7 @@ from detectron2.projects.deeplab import add_deeplab_config, build_lr_scheduler
 from detectron2.solver.build import maybe_add_gradient_clipping
 from detectron2.utils.logger import setup_logger
 
-from gres_model.config import add_gres_config
+from gres_model.config import add_gres_config, add_rela_config
 
 # MaskFormer
 from gres_model import (
@@ -190,6 +190,7 @@ def setup(args):
     add_maskformer2_config(cfg)
     add_refcoco_config(cfg)
     add_gres_config(cfg)
+    add_rela_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     cfg.freeze()
