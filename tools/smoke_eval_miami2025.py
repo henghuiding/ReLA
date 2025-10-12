@@ -269,6 +269,18 @@ def _merge_group_offline(
                 original_hw = img_hw_map.get(int(image_id))
             except (TypeError, ValueError):
                 original_hw = None
+        if isinstance(original_hw, dict):
+            oh = original_hw.get("height")
+            ow = original_hw.get("width")
+            try:
+                oh_i = int(oh)
+                ow_i = int(ow)
+                if oh_i > 0 and ow_i > 0:
+                    original_hw = (oh_i, ow_i)
+                else:
+                    original_hw = None
+            except (TypeError, ValueError):
+                original_hw = None
 
         mask, status = _decode_annotation_offline(
             ann,
@@ -407,13 +419,20 @@ def _run_offline(args: argparse.Namespace) -> None:
         grouped: Dict[str, List[Dict]] = {}
         missing_ann_ids: List[int] = []
         for idx, ann_id in enumerate(ann_ids):
-            ann = ann_map.get(int(ann_id))
-            if not ann and mapper_cache:
-                ann = mapper_cache.get(int(ann_id))
-            if not ann:
-                missing_ann_ids.append(int(ann_id))
+            try:
+                ann_key = int(ann_id)
+            except (TypeError, ValueError):
                 continue
-            group_key = str(ann.get("id", ann_id))
+            if ann_key < 0:
+                missing_ann_ids.append(ann_key)
+                continue
+            ann = ann_map.get(ann_key)
+            if not ann and mapper_cache:
+                ann = mapper_cache.get(ann_key)
+            if not ann:
+                missing_ann_ids.append(ann_key)
+                continue
+            group_key = str(ann.get("id", ann_key))
             grouped.setdefault(group_key, []).append(ann)
 
         final_mask = np.zeros((height, width), dtype=np.uint8)
