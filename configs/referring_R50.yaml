@@ -47,8 +47,8 @@ INPUT:
   IMAGE_SIZE: 480
 
 DATASETS:
-  TRAIN: ("grefcoco_unc_train",)
-  TEST: ("grefcoco_unc_val",)
+  TRAIN: ("miami2025_train",)
+  TEST: ("miami2025_val",)
 
 SOLVER:
   IMS_PER_BATCH: 48

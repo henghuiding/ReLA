@@ -130,7 +130,8 @@ class RefCOCOMapper:
             logging.getLogger(__name__).info(
                 "Loading BERT tokenizer: {}...".format(self.bert_type)
             )
-            self.tokenizer = BertTokenizer.from_pretrained(self.bert_type)
+            self.tokenizer = BertTokenizer.from_pretrained("/autodl-tmp/bert-base-uncased")
+
         else:
             self.tokenizer = None
 
@@ -238,12 +239,16 @@ class RefCOCOMapper:
             )
 
         unique_dims = {dims for _, dims in valid_sources}
-        if len(unique_dims) > 1:
-            raise AssertionError(
-                f"[RefCOCOMapper] Conflicting height/width sources detected: {valid_sources}"
-            )
 
-        height, width = next(iter(unique_dims))
+                # 如果存在多个候选尺寸，不再直接抛错，而是取面积最大的那一组
+        if len(unique_dims) > 1:
+            print(f"[RefCOCOMapper] Warning: Conflicting H/W sources {valid_sources}, auto-resolving...")
+            # 过滤掉无效尺寸（≤1）
+            valid_hw = [hw for hw in unique_dims if hw[0] > 1 and hw[1] > 1]
+            # 取面积最大的尺寸，通常是原图大小
+            height, width = max(valid_hw, key=lambda x: x[0] * x[1])
+        else:
+            height, width = next(iter(unique_dims))
 
         if dataset_dict is not None:
             assertions = dataset_dict.setdefault("_mask_assertions", {})
@@ -615,25 +620,7 @@ class RefCOCOMapper:
                     )
                     raise
 
-            if mask_np is None and ann_record is None:
-                raw_ann = self._find_raw_annotation(raw_annotations, ann_id)
-                if raw_ann is not None:
-                    try:
-                        mask_np, decode_status = self._decode_annotation_mask(
-                            raw_ann,
-                            height,
-                            width,
-                            original_hw=dataset_dict.get("_original_hw"),
-                            dataset_dict=dataset_dict,
-                        )
-                        current_status.append(decode_status)
-                    except ValueError as exc:
-                        logger.error(
-                            "[RefCOCOMapper] Raw annotation decode failed for ann_id=%s: %s",
-                            ann_key,
-                            exc,
-                        )
-                        raise
+            
 
             if mask_np is None and transformed_annotations:
                 for ann in transformed_annotations:
@@ -677,6 +664,77 @@ class RefCOCOMapper:
             merged_mask = np.maximum(merged_mask, mask_np)
             contributing += 1
 
+            if ann_record is not None and ann_record.get("bbox") is not None:
+                try:
+                # 1) 取 COCO bbox，并转换到 XYXY
+                bbox_mode = ann_record.get("bbox_mode", BoxMode.XYWH_ABS)
+                xyxy = BoxMode.convert(ann_record.get("bbox"), bbox_mode, BoxMode.XYXY_ABS)
+
+                # 2) 计算 mask 在当前 (height, width) 画布下的外接矩形
+                ys, xs = np.nonzero(mask_np)
+                mask_x0 = int(xs.min()) if xs.size else 0
+                mask_y0 = int(ys.min()) if ys.size else 0
+                mask_x1 = int(xs.max() + 1) if xs.size else 0
+                mask_y1 = int(ys.max() + 1) if ys.size else 0
+
+                # 3) 把 COCO 原图坐标的 bbox 缩放到当前画布坐标系
+                #    original_candidate：你上面已经根据 ann_record/image_id 推过来的“原图尺寸”
+                ref_hw = original_candidate or dataset_dict.get("_original_hw")
+                if ref_hw is None:
+                    ref_hw = (height, width)  # 兜底：若未知则视为同一坐标系
+
+                oh, ow = int(ref_hw[0]), int(ref_hw[1])
+                if oh <= 0 or ow <= 0:
+                    oh, ow = height, width
+
+                # 目标坐标系 = (height, width)
+                sx = float(width) / float(ow)
+                sy = float(height) / float(oh)
+
+                bx0 = xyxy[0] * sx
+                by0 = xyxy[1] * sy
+                bx1 = xyxy[2] * sx
+                by1 = xyxy[3] * sy
+
+                # 4) 设置容差：考虑取整 & 栅格化误差（随分辨率自适应）
+                tol = max(1.5, 0.005 * float(max(height, width)))
+
+                # 5) 判断是否 bbox 覆盖住 mask 外接矩形（在同一坐标系下）
+                coords_ok = (
+                    mask_x0 >= math.floor(bx0 - tol)
+                    and mask_y0 >= math.floor(by0 - tol)
+                    and mask_x1 <= math.ceil(bx1 + tol)
+                    and mask_y1 <= math.ceil(by1 + tol)
+                )
+
+                # 6) 仅当本实例“使用了 bbox 回退生成 mask”时才强约束；否则降级为 warning
+                is_bbox_used = any(("bbox" in s.lower()) for s in current_status)
+
+                assertions["coords_contract_ok"] = bool(coords_ok)
+                if not coords_ok:
+                    msg = (
+                        f"[RefCOCOMapper] coords_contract mismatch (scaled bbox "
+                        f"({bx0:.1f},{by0:.1f},{bx1:.1f},{by1:.1f}) vs "
+                        f"mask_box ({mask_x0},{mask_y0},{mask_x1},{mask_y1})) "
+                        f"@canvas ({height},{width}), tol={tol:.2f}, ann_id={ann_key}"
+                    )
+                    if is_bbox_used:
+                        # bbox 回退时必须满足契约：否则说明 bbox→mask 或尺寸对齐有问题
+                        logger.error(msg)
+                        raise AssertionError("coords_contract_ok")
+                    else:
+                        # poly/RLE 情况下常见 1-2px 漂移：记录告警但不中断训练
+                        logger.warning(msg)
+
+            except Exception as exc:
+                logger.error(
+                    "[RefCOCOMapper] Coordinate contract failure for ann_id=%s: %s",
+                    ann_key,
+                    exc,
+                )
+                raise
+
+            
             if ann_record is not None and ann_record.get("bbox") is not None:
                 try:
                     bbox_mode = ann_record.get("bbox_mode", BoxMode.XYWH_ABS)

@@ -11,6 +11,6 @@ MODEL:
     DROP_PATH_RATE: 0.3
     PATCH_NORM: True
     PRETRAIN_IMG_SIZE: 384
-  WEIGHTS: "models/swin_base_patch4_window12_384_22k.pkl"
+  WEIGHTS: "models/swin_base_patch4_window12_384_22k.pth"
   PIXEL_MEAN: [123.675, 116.280, 103.530]
   PIXEL_STD: [58.395, 57.120, 57.375]

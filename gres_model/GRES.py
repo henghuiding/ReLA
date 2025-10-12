@@ -75,7 +75,7 @@ class GRES(nn.Module):
         backbone = build_backbone(cfg)
         sem_seg_head = build_sem_seg_head(cfg, backbone.output_shape())
 
-        text_encoder = BertModel.from_pretrained(cfg.REFERRING.BERT_TYPE)
+        text_encoder = BertModel.from_pretrained("/autodl-tmp/bert-base-uncased")
         text_encoder.pooler = None
 
         # loss weights
