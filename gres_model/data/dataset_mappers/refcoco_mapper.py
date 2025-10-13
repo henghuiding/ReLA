@@ -212,6 +212,92 @@ class RefCOCOMapper:
             return None
         return cand_h, cand_w
 
+    @staticmethod
+    def _infer_canvas_hw_from_segmentation(segmentation) -> Optional[Tuple[int, int]]:
+        if not segmentation:
+            return None
+
+        def _sanitize_from_size(size_obj) -> Optional[Tuple[int, int]]:
+            if not isinstance(size_obj, (list, tuple)) or len(size_obj) < 2:
+                return None
+            try:
+                sh = int(round(float(size_obj[0])))
+                sw = int(round(float(size_obj[1])))
+            except (TypeError, ValueError):
+                return None
+            if sh <= 1 or sw <= 1:
+                return None
+            return sh, sw
+
+        if isinstance(segmentation, dict):
+            size = segmentation.get("size")
+            size_dims = _sanitize_from_size(size)
+            if size_dims:
+                return size_dims
+            return None
+
+        max_x = 0.0
+        max_y = 0.0
+        found_poly = False
+        if isinstance(segmentation, (list, tuple)):
+            for piece in segmentation:
+                if isinstance(piece, dict):
+                    dims = RefCOCOMapper._infer_canvas_hw_from_segmentation(piece)
+                    if dims:
+                        return dims
+                    continue
+                if not isinstance(piece, (list, tuple)):
+                    continue
+                coords: List[float] = []
+                for coord in piece:
+                    try:
+                        coords.append(float(coord))
+                    except (TypeError, ValueError):
+                        continue
+                if len(coords) < 2:
+                    continue
+                xs = coords[0::2]
+                ys = coords[1::2]
+                if xs:
+                    max_x = max(max_x, max(xs))
+                if ys:
+                    max_y = max(max_y, max(ys))
+                found_poly = True
+
+        if not found_poly:
+            return None
+
+        height = int(math.ceil(max_y + 1.0))
+        width = int(math.ceil(max_x + 1.0))
+        if height <= 1 or width <= 1:
+            return None
+        return height, width
+
+    @staticmethod
+    def _infer_canvas_hw_from_annotation(ann: Dict[str, object]) -> Optional[Tuple[int, int]]:
+        if not isinstance(ann, dict):
+            return None
+
+        seg_dims = RefCOCOMapper._infer_canvas_hw_from_segmentation(ann.get("segmentation"))
+        if seg_dims:
+            return seg_dims
+
+        bbox = ann.get("bbox")
+        if bbox is not None:
+            bbox_mode = ann.get("bbox_mode", BoxMode.XYWH_ABS)
+            try:
+                x0, y0, x1, y1 = BoxMode.convert(bbox, bbox_mode, BoxMode.XYXY_ABS)
+                width = int(math.ceil(max(x1, 0.0)))
+                height = int(math.ceil(max(y1, 0.0)))
+                if height > 1 and width > 1:
+                    return height, width
+            except Exception:
+                logger.debug(
+                    "[RefCOCOMapper] Failed to infer canvas from bbox for ann_id=%s",
+                    ann.get("id"),
+                )
+        return None
+
     @classmethod
     def _normalize_hw(
         cls,
@@ -233,7 +319,9 @@ class RefCOCOMapper:
             )
 
         trusted_names = {
-            name for name, _ in valid_sources if name in {"image_tensor", "instances_json"}
+            name
+            for name, _ in valid_sources
+            if name in {"image_tensor", "instances_json", "poly_bounds"}
         }
         if not trusted_names:
             raise AssertionError(
@@ -243,8 +331,9 @@ class RefCOCOMapper:
         priority = {
             "image_tensor": 0,
             "instances_json": 1,
-            "dataset_fields": 2,
-            "original_hw": 3,
+            "poly_bounds": 2,
+            "dataset_fields": 3,
+            "original_hw": 4,
         }
 
         candidates: List[Tuple[bool, int, int, int, str, Tuple[int, int]]] = []
@@ -273,7 +362,11 @@ class RefCOCOMapper:
 
         if dataset_dict is not None:
             assertions = dataset_dict.setdefault("_mask_assertions", {})
-            assertions["has_hw_from_images_json"] = "instances_json" in trusted_names or "image_tensor" in trusted_names
+            assertions["has_hw_from_images_json"] = (
+                "instances_json" in trusted_names
+                or "image_tensor" in trusted_names
+                or "poly_bounds" in trusted_names
+            )
             assertions["no_1x1_anywhere"] = height > 1 and width > 1
 
         assert height > 1 and width > 1, "[RefCOCOMapper] Invalid normalized shape"
@@ -506,6 +599,11 @@ class RefCOCOMapper:
         assertions.setdefault("coords_contract_ok", True)
         assertions.setdefault("bbox_fallback_uses_true_hw", True)
 
+        raw_annotations = dataset_dict.get("_raw_annotations") or []
+        ann_ids_seed = self._collect_ann_ids(dataset_dict, raw_annotations)
+
+        ann_store_lookup = self.id_to_ann or {}
+
         image = dataset_dict.get("image")
         tensor_hw: Optional[Tuple[int, int]] = None
         if torch.is_tensor(image):
@@ -535,6 +633,34 @@ class RefCOCOMapper:
         ann_store = inst_data["annotations"] if inst_data else {}
         image_hw_store = inst_data["image_hw"] if inst_data else {}
 
+        poly_hw: Optional[Tuple[int, int]] = None
+        if ann_ids_seed:
+            for ann_id in ann_ids_seed:
+                try:
+                    ann_key = int(ann_id)
+                except (TypeError, ValueError):
+                    continue
+                ann_record = ann_store_lookup.get(ann_key) or ann_store.get(ann_key)
+                if not ann_record:
+                    continue
+                dims = self._infer_canvas_hw_from_annotation(ann_record)
+                if dims is None:
+                    continue
+                if poly_hw is None:
+                    poly_hw = dims
+                else:
+                    poly_hw = (max(poly_hw[0], dims[0]), max(poly_hw[1], dims[1]))
+
+        if poly_hw is None and raw_annotations:
+            for ann in raw_annotations:
+                dims = self._infer_canvas_hw_from_annotation(ann)
+                if dims is None:
+                    continue
+                if poly_hw is None:
+                    poly_hw = dims
+                else:
+                    poly_hw = (max(poly_hw[0], dims[0]), max(poly_hw[1], dims[1]))
+
         image_meta_hw: Optional[Tuple[int, int]] = None
         image_id = dataset_dict.get("image_id")
         if image_id is not None:
@@ -556,14 +682,14 @@ class RefCOCOMapper:
                 ("dataset_fields", stored_hw),
                 ("original_hw", original_hw),
                 ("instances_json", image_meta_hw),
+                ("poly_bounds", poly_hw),
             ],
             dataset_dict=dataset_dict,
         )
 
-        raw_annotations = dataset_dict.get("_raw_annotations") or []
         transformed_annotations = dataset_dict.get("annotations", []) or []
 
-        ann_ids_raw = self._collect_ann_ids(dataset_dict, raw_annotations)
+        ann_ids_raw = list(ann_ids_seed)
         valid_ann_ids: List[int] = []
         for ann in ann_ids_raw:
             try:
@@ -581,8 +707,6 @@ class RefCOCOMapper:
         had_poly_empty = False
         had_exception = False
         contributing = 0
-
-        ann_store_lookup = self.id_to_ann or {}
 
         for ann_id in valid_ann_ids:
             ann_key = int(ann_id)
