@@ -3,14 +3,47 @@ _BASE_: referring_miami2025.yaml
 MODEL:
   META_ARCHITECTURE: "LQMFormer"
 
+  # --- Backbone settings ---
+  BACKBONE:
+    NAME: "D2SwinTransformer"
+
+  # --- Swin-Base Transformer (Window 12, 384x384, 22k) ---
+  SWIN:
+    EMBED_DIM: 128
+    DEPTHS: [2, 2, 18, 2]
+    NUM_HEADS: [4, 8, 16, 32]
+    WINDOW_SIZE: 12
+    APE: False
+    DROP_PATH_RATE: 0.3
+    PATCH_NORM: True
+    PRETRAIN_IMG_SIZE: 384
+
+  # --- Pretrained weights path (absolute for stability) ---
+  WEIGHTS: "/autodl-tmp/pretrained/swin_base_patch4_window12_384_22k.pkl"
+
+INPUT:
+  FORMAT: "RGB"
+  IMAGE_SIZE: 384    # must match Swin pretrain resolution
+
 DATASETS:
   TRAIN: ("miami2025_train",)
   TEST: ("miami2025_val",)
   TRAIN_MAPPER: "RefCOCOMapper"
   TEST_MAPPER: "RefCOCOMapper"
 
-INPUT:
-  FORMAT: "RGB"
+SOLVER:
+  IMS_PER_BATCH: 4        # adjust based on GPU memory
+  BASE_LR: 0.0001
+  WEIGHT_DECAY: 0.05
+  MAX_ITER: 90000
+  STEPS: (60000, 80000)
+  CHECKPOINT_PERIOD: 5000
+  WARMUP_ITERS: 1000
+  AMP:
+    ENABLED: True          # enable mixed precision (saves memory)
+
+TEST:
+  EVAL_PERIOD: 5000
 
 LQM:
   DQM:
