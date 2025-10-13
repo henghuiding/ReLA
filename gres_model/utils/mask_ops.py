@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, List, Optional, Sequence, Tuple, Union
+import math
+from typing import Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 import numpy as np
 
@@ -217,17 +218,72 @@ def _poly_to_mask_safe(
     if not polygons:
         return None, "poly_missing"
 
-    base_h, base_w = original_size if original_size else (height, width)
-    base_h = max(int(base_h), 1)
-    base_w = max(int(base_w), 1)
-    mask, status = _safe_decode(_decode_polygons, polygons, base_h, base_w)
-    if mask is None:
-        return None, f"poly_{status or 'invalid'}"
+    def _sanitize_size(h: float, w: float) -> Tuple[int, int]:
+        return max(int(round(h)), 1), max(int(round(w)), 1)
 
-    mask = _resize_mask(mask, height, width)
-    if mask is None or mask.sum() == 0:
-        return None, "poly_empty"
-    return mask, "poly"
+    def _max_coords(polys: Sequence[Sequence[float]]) -> Tuple[float, float]:
+        max_x = 0.0
+        max_y = 0.0
+        for poly in polys:
+            if not poly:
+                continue
+            xs = poly[0::2]
+            ys = poly[1::2]
+            if xs:
+                max_x = max(max_x, float(max(xs)))
+            if ys:
+                max_y = max(max_y, float(max(ys)))
+        return max_x, max_y
+
+    target_h, target_w = _sanitize_size(height, width)
+    candidates: List[Tuple[str, int, int]] = []
+    seen: Set[Tuple[int, int]] = set()
+
+    def _add_candidate(tag: str, h: int, w: int) -> None:
+        if h <= 0 or w <= 0:
+            return
+        key = (h, w)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append((tag, h, w))
+
+    if original_size:
+        oh, ow = _sanitize_size(original_size[0], original_size[1])
+        _add_candidate("original", oh, ow)
+    _add_candidate("target", target_h, target_w)
+
+    if original_size:
+        oh, ow = _sanitize_size(original_size[0], original_size[1])
+        _add_candidate("swapped", ow, oh)
+
+    max_x, max_y = _max_coords(polygons)
+    if max_x > 0 or max_y > 0:
+        needed_h = max(target_h, int(math.ceil(max_y + 1)))
+        needed_w = max(target_w, int(math.ceil(max_x + 1)))
+        _add_candidate("polybox", needed_h, needed_w)
+
+    attempt_log: List[str] = []
+
+    for tag, base_h, base_w in candidates:
+        mask, status = _safe_decode(_decode_polygons, polygons, base_h, base_w)
+        if status:
+            attempt_log.append(f"{tag}:{status}")
+        if mask is None or mask.sum() == 0:
+            continue
+
+        resized = _resize_mask(mask, target_h, target_w)
+        if resized is None or resized.sum() == 0:
+            attempt_log.append(f"{tag}:empty")
+            continue
+
+        if tag == "original":
+            return resized, "poly"
+        return resized, f"poly({tag})"
+
+    if attempt_log:
+        return None, f"poly_empty[{'+'.join(attempt_log)}]"
+    return None, "poly_empty"
 
 
 def _rle_to_mask_safe(
