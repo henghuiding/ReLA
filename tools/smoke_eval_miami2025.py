@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from collections import Counter
+import math
 from types import SimpleNamespace
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -160,6 +161,94 @@ def _as_numpy_mask(mask, height: int, width: int) -> np.ndarray:
     return mask_np
 
 
+def _infer_canvas_hw_from_segmentation(segmentation) -> Optional[Tuple[int, int]]:
+    if not segmentation:
+        return None
+
+    def _sanitize_from_size(size_obj) -> Optional[Tuple[int, int]]:
+        if not isinstance(size_obj, (list, tuple)) or len(size_obj) < 2:
+            return None
+        try:
+            sh = int(round(float(size_obj[0])))
+            sw = int(round(float(size_obj[1])))
+        except (TypeError, ValueError):
+            return None
+        if sh <= 1 or sw <= 1:
+            return None
+        return sh, sw
+
+    if isinstance(segmentation, dict):
+        size_dims = _sanitize_from_size(segmentation.get("size"))
+        if size_dims:
+            return size_dims
+        return None
+
+    max_x = 0.0
+    max_y = 0.0
+    found_poly = False
+    if isinstance(segmentation, (list, tuple)):
+        for piece in segmentation:
+            if isinstance(piece, dict):
+                dims = _infer_canvas_hw_from_segmentation(piece)
+                if dims:
+                    return dims
+                continue
+            if not isinstance(piece, (list, tuple)):
+                continue
+            coords: List[float] = []
+            for coord in piece:
+                try:
+                    coords.append(float(coord))
+                except (TypeError, ValueError):
+                    continue
+            if len(coords) < 2:
+                continue
+            xs = coords[0::2]
+            ys = coords[1::2]
+            if xs:
+                max_x = max(max_x, max(xs))
+            if ys:
+                max_y = max(max_y, max(ys))
+            found_poly = True
+
+    if not found_poly:
+        return None
+
+    height = int(math.ceil(max_y + 1.0))
+    width = int(math.ceil(max_x + 1.0))
+    if height <= 1 or width <= 1:
+        return None
+    return height, width
+
+
+def _infer_canvas_hw_from_annotation(ann: Dict) -> Optional[Tuple[int, int]]:
+    if not isinstance(ann, dict):
+        return None
+
+    seg_dims = _infer_canvas_hw_from_segmentation(ann.get("segmentation"))
+    if seg_dims:
+        return seg_dims
+
+    bbox = ann.get("bbox")
+    if bbox is not None and len(bbox) >= 4:
+        mode = ann.get("bbox_mode", "XYWH_ABS")
+        try:
+            if mode in ("XYXY_ABS", 0):
+                x0, y0, x1, y1 = bbox
+            else:
+                x0, y0, w, h = bbox
+                x1 = x0 + w
+                y1 = y0 + h
+            width = int(math.ceil(max(x1, 0.0)))
+            height = int(math.ceil(max(y1, 0.0)))
+            if height > 1 and width > 1:
+                return height, width
+        except Exception:
+            pass
+
+    return None
+
+
 def _build_dummy_outputs(inputs: List[dict]):
     outputs = []
     for sample in inputs:
@@ -281,6 +370,11 @@ def _merge_group_offline(
                     original_hw = None
             except (TypeError, ValueError):
                 original_hw = None
+
+        if original_hw is None or original_hw[0] <= 1 or original_hw[1] <= 1:
+            inferred_hw = _infer_canvas_hw_from_annotation(ann)
+            if inferred_hw is not None:
+                original_hw = inferred_hw
 
         mask, status = _decode_annotation_offline(
             ann,
@@ -434,6 +528,25 @@ def _run_offline(args: argparse.Namespace) -> None:
                 continue
             group_key = str(ann.get("id", ann_key))
             grouped.setdefault(group_key, []).append(ann)
+
+        if (height <= 1 or width <= 1) and grouped:
+            inferred_hw: Optional[Tuple[int, int]] = None
+            for group in grouped.values():
+                for ann in group:
+                    dims = _infer_canvas_hw_from_annotation(ann)
+                    if dims is None:
+                        continue
+                    if inferred_hw is None:
+                        inferred_hw = dims
+                    else:
+                        inferred_hw = (
+                            max(inferred_hw[0], dims[0]),
+                            max(inferred_hw[1], dims[1]),
+                        )
+            if inferred_hw is not None:
+                height, width = inferred_hw
+                height = max(height, 1)
+                width = max(width, 1)
 
         final_mask = np.zeros((height, width), dtype=np.uint8)
         readable_tokens: List[str] = []
