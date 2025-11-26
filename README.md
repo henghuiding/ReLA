@@ -78,7 +78,7 @@ Update: We have added supports for ResNet-50 and Swin-Tiny backbones! Feel free 
 
 All models can be downloaded from:
 
-[Onedrive](https://entuedu-my.sharepoint.com/:f:/g/personal/liuc0058_e_ntu_edu_sg/EqyL6nftLjdIihQG2rYirPoB1Sm3HBJwuZgtPII8WcevQw?e=pI1rrg)
+[Google Drive](https://drive.google.com/drive/folders/1Jw7GKiN-Y2tgLL6ueOKOKfikiWVOl2-n?usp=drive_link)
 
 ## Acknowledgement
 
